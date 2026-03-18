@@ -1,27 +1,13 @@
 import { Monitor, Moon, Sun } from 'lucide-react'
 import { useTheme } from '@/components/theme-provider'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbList,
-  BreadcrumbPage,
-} from '@/components/ui/breadcrumb'
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme()
 
   return (
     <>
-      <header className="drag-region flex shrink-0 items-center gap-2 border-b px-4 pt-[52px] pb-3">
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem>
-              <BreadcrumbPage>Settings</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      </header>
+      <div className="drag-region h-[52px] shrink-0" />
       <div className="flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-2xl space-y-8">
           <div>

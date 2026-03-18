@@ -15,7 +15,7 @@ import {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar variant="inset" collapsible="none" {...props}>
-      <SidebarHeader className="drag-region pt-[52px]">
+      <SidebarHeader className="drag-region pt-[38px]">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
