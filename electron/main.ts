@@ -1,8 +1,27 @@
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
+import { execSync } from 'node:child_process'
+import fs from 'node:fs'
 import path from 'node:path'
+
 const isDev = !app.isPackaged
 let updateState = 'idle'
+
+// --- Settings persistence ---
+const settingsPath = path.join(app.getPath('userData'), 'settings.json')
+
+function readSettings(): Record<string, unknown> {
+  try {
+    return JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+  } catch {
+    return {}
+  }
+}
+
+function writeSettings(patch: Record<string, unknown>) {
+  const current = readSettings()
+  fs.writeFileSync(settingsPath, JSON.stringify({ ...current, ...patch }, null, 2))
+}
 
 function sendUpdateState(status: string, detail?: string) {
   updateState = status
@@ -119,6 +138,43 @@ app.whenReady().then(() => {
   ipcMain.handle('updates:install', () => {
     if (!isDev) {
       autoUpdater.quitAndInstall()
+    }
+  })
+
+  // --- Settings ---
+  ipcMain.handle('settings:get', () => readSettings())
+  ipcMain.handle('settings:set', (_event, patch: Record<string, unknown>) => {
+    writeSettings(patch)
+  })
+
+  // --- Services folder ---
+  ipcMain.handle('services:select-folder', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      message: 'Select the justo-services repository folder',
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
+  })
+
+  ipcMain.handle('services:validate-folder', (_event, folderPath: string) => {
+    try {
+      if (!fs.existsSync(folderPath)) {
+        return { valid: false, error: 'Directory does not exist.' }
+      }
+
+      if (!fs.existsSync(path.join(folderPath, '.git'))) {
+        return { valid: false, error: 'Not a git repository.' }
+      }
+
+      const remotes = execSync('git remote -v', { cwd: folderPath, encoding: 'utf-8' })
+      if (!remotes.includes('getjusto/justo-services')) {
+        return { valid: false, error: 'Not the getjusto/justo-services repository.' }
+      }
+
+      return { valid: true }
+    } catch {
+      return { valid: false, error: 'Could not validate the folder.' }
     }
   })
 

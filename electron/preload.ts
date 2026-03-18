@@ -22,4 +22,13 @@ contextBridge.exposeInMainWorld('desktop', {
       ipcRenderer.removeListener('updates:status', listener)
     }
   },
+
+  // Settings
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+  setSettings: (patch: Record<string, unknown>) => ipcRenderer.invoke('settings:set', patch),
+
+  // Services folder
+  selectFolder: () => ipcRenderer.invoke('services:select-folder'),
+  validateServicesFolder: (folderPath: string) =>
+    ipcRenderer.invoke('services:validate-folder', folderPath),
 })
