@@ -32,9 +32,9 @@ function App() {
   }
 
   return (
-    <SidebarProvider>
+    <SidebarProvider className="h-screen overflow-hidden">
       <AppSidebar />
-      <SidebarInset>
+      <SidebarInset className="min-h-0">
         <Routes>
           <Route path="/" element={<Page />} />
           <Route path="/settings" element={<SettingsPage />} />
