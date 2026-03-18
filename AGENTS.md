@@ -1,5 +1,7 @@
 # AGENTS
 
+This is an electron app made for Engineer in Justo company to help them develop and organize code
+
 ## Project
 
 - App: `dev6`

@@ -21,7 +21,7 @@ function createMainWindow() {
     minWidth: 1120,
     minHeight: 720,
     titleBarStyle: 'hiddenInset',
-    backgroundColor: '#0c0f0e',
+    backgroundColor: '#fafafa',
     webPreferences: {
       preload: path.join(appPath, 'dist-electron/preload.cjs'),
       contextIsolation: true,
