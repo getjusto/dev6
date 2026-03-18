@@ -23,6 +23,23 @@ function writeSettings(patch: Record<string, unknown>) {
   fs.writeFileSync(settingsPath, JSON.stringify({ ...current, ...patch }, null, 2))
 }
 
+function getServicesPath(): string {
+  const settings = readSettings()
+  const p = settings.servicesPath as string | undefined
+  if (!p) throw new Error('servicesPath not configured')
+  return p
+}
+
+function callDev5(command: string): unknown {
+  const servicesPath = getServicesPath()
+  const output = execSync(`./dev5 ${command} --json`, {
+    cwd: servicesPath,
+    encoding: 'utf-8',
+    maxBuffer: 10 * 1024 * 1024,
+  })
+  return JSON.parse(output)
+}
+
 function sendUpdateState(status: string, detail?: string) {
   updateState = status
 
