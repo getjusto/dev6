@@ -44,6 +44,10 @@ export default defineConfig({
       },
     }),
   ],
+  server: {
+    port: 4932,
+    strictPort: true,
+  },
   resolve: {
     alias: {
       '@': '/src',
