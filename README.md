@@ -18,20 +18,27 @@ Private macOS Electron starter for `getjusto/dev6`.
 - `pnpm dev`: run the Vite renderer and Electron shell together
 - `pnpm build`: build renderer and Electron bundles
 - `pnpm dist:mac`: create a local macOS package in `release/`
-- `pnpm publish:mac`: build and publish release artifacts using the S3 config
+- `pnpm publish:mac`: build and publish release artifacts to GitHub Releases
 
-## S3 publishing
+## GitHub publishing
 
-`electron-builder.yml` is set to publish to S3 with:
+`electron-builder.yml` is set to publish to GitHub Releases for `getjusto/dev6`.
 
-- `DEV6_S3_BUCKET`
-- `DEV6_S3_REGION`
+The authenticated publish flow uses:
 
-For a truly private auto-update flow, plan the runtime fetch path before shipping. A private bucket typically needs one of these:
+- `GH_TOKEN`
+- `APPLE_ID`
+- `APPLE_APP_SPECIFIC_PASSWORD` or `APPLE_PASSWORD`
+- `APPLE_TEAM_ID`
+- optional `CSC_NAME` to select a specific signing identity from Keychain
 
-- a protected proxy endpoint
-- signed URLs issued by your backend
-- a distribution layer in front of S3
+For the simplest `electron-updater` setup, keep the release artifacts publicly downloadable. The repository itself can remain private only if you do not rely on GitHub-hosted auto-updates for end users.
+
+For local publishing on the current maintainer machine, use:
+
+- `pnpm release:mac`
+
+That script reads the GitHub token from `gh auth token`, defaults `CSC_NAME` to `Developer ID Application: Orionsoft SpA (3CZ24HA8DS)`, and maps `APPLE_PASSWORD` to `APPLE_APP_SPECIFIC_PASSWORD` for compatibility with the existing `dev4` flow.
 
 ## Shipping notes
 
@@ -39,4 +46,5 @@ Before production distribution on macOS, add:
 
 - Apple Developer signing identity
 - notarization credentials
+- GitHub release token
 - CI secrets for publishing and signing

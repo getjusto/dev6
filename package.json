@@ -11,7 +11,8 @@
     "dist:mac": "pnpm build && electron-builder --mac",
     "lint": "eslint .",
     "preview": "vite preview",
-    "publish:mac": "pnpm build && electron-builder --mac --publish always"
+    "publish:mac": "pnpm build && electron-builder --mac --publish always",
+    "release:mac": "./scripts/publish-mac.sh"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",

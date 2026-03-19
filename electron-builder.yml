@@ -14,7 +14,7 @@ mac:
   hardenedRuntime: true
   gatekeeperAssess: false
 publish:
-  provider: s3
-  bucket: ${env.DEV6_S3_BUCKET}
-  region: ${env.DEV6_S3_REGION}
-  path: dev6
+  provider: github
+  owner: getjusto
+  repo: dev6
+  releaseType: draft

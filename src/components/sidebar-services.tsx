@@ -1,7 +1,6 @@
-import { Plus, Power, PowerOff, RotateCcw } from "lucide-react";
+import { Power, PowerOff, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { ServiceStatusButton } from "@/components/service-status-button";
+import { useNavigate } from "react-router-dom";
 import {
 	SidebarGroup,
 	SidebarGroupContent,
@@ -19,8 +18,6 @@ function ServiceRow({
 	onSelect,
 }: {
 	service: Dev5ServiceStatus;
-	isPending: boolean;
-	isActive: boolean;
 	onToggle: (service: Dev5ServiceStatus) => void;
 	onSelect: (service: Dev5ServiceStatus) => void;
 }) {
@@ -54,11 +51,9 @@ function ServiceRow({
 
 export function SidebarServices() {
 	const navigate = useNavigate();
-	const location = useLocation();
 	const [services, setServices] = useState<Dev5ServiceStatus[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
-	const [pendingServices, setPendingServices] = useState<string[]>([]);
 	const isRefreshingRef = useRef(false);
 
 	async function refreshServices(showLoading: boolean) {
@@ -109,8 +104,6 @@ export function SidebarServices() {
 
 	async function handleToggle(service: Dev5ServiceStatus) {
 		try {
-			setPendingServices((current) => [...current, service.service_name]);
-
 			if (service.status === "on") {
 				await window.desktop.stopService(service.service_name);
 			} else if (service.status === "off") {
@@ -127,10 +120,6 @@ export function SidebarServices() {
 				toggleError instanceof Error
 					? toggleError.message
 					: "Could not change service state.",
-			);
-		} finally {
-			setPendingServices((current) =>
-				current.filter((name) => name !== service.service_name),
 			);
 		}
 	}
@@ -155,10 +144,6 @@ export function SidebarServices() {
 							<ServiceRow
 								key={`${service.dir_name}:${service.service_name}`}
 								service={service}
-								isPending={pendingServices.includes(service.service_name)}
-								isActive={
-									location.pathname === `/services/${service.service_name}`
-								}
 								onToggle={handleToggle}
 								onSelect={handleSelect}
 							/>
