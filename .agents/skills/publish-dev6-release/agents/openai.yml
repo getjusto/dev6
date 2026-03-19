@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish dev6 release"
+  short_description: "Ship a new signed dev6 macOS release"
+  default_prompt: "Use $publish-dev6-release to publish a new dev6 macOS version to GitHub Releases."
