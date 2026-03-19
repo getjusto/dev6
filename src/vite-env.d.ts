@@ -28,6 +28,9 @@ declare global {
 	interface TerminalSessionSummary {
 		id: string;
 		title: string;
+		terminalTitle: string | null;
+		appKind: "terminal" | "codex" | "claude";
+		appIconDataUrl: string | null;
 		cwd: string;
 		shell: string;
 		createdAt: number;

@@ -35,14 +35,14 @@ export function TerminalSessionsProvider({ children }: { children: ReactNode }) 
       setIsLoading(false)
     })
 
-    const unsubscribe = window.desktop.onTerminalSessionsChanged((nextSessions) => {
+    const unsubscribeSessions = window.desktop.onTerminalSessionsChanged((nextSessions) => {
       setSessions(nextSessions)
       setIsLoading(false)
     })
 
     return () => {
       isActive = false
-      unsubscribe()
+      unsubscribeSessions()
     }
   }, [])
 

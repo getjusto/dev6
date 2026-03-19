@@ -20,10 +20,15 @@ const EDITOR_APP_NAMES = {
   cursor: 'Cursor',
 } as const
 type TerminalSessionStatus = 'running' | 'exited'
+type TerminalSessionAppKind = 'terminal' | 'codex' | 'claude'
 
 type TerminalSessionRecord = {
   id: string
   title: string
+  baseTitle: string
+  terminalTitle: string | null
+  appKind: TerminalSessionAppKind
+  appIconDataUrl: string | null
   cwd: string
   shell: string
   createdAt: number
@@ -37,6 +42,7 @@ type TerminalSessionRecord = {
 }
 
 const terminalSessions = new Map<string, TerminalSessionRecord>()
+const terminalAppIconCache = new Map<TerminalSessionAppKind, string | null>()
 let terminalLabelCounter = 0
 let terminalCwdInterval: NodeJS.Timeout | null = null
 const EDITOR_APP_BUNDLES = {
@@ -49,6 +55,11 @@ const EDITOR_ICON_NAMES = {
   vscode: ['Code.icns', 'Visual Studio Code.icns'],
   cursor: ['Cursor.icns'],
 } as const
+const TERMINAL_APP_BUNDLES = {
+  codex: 'Codex.app',
+  claude: 'Claude.app',
+} as const
+const TERMINAL_TITLE_PATTERN = /\u001B\](?:0|2);([\s\S]*?)(?:\u0007|\u001B\\)/g
 
 // --- Settings persistence ---
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
@@ -166,6 +177,10 @@ async function findEditorAppPath(
   editor: keyof typeof EDITOR_APP_NAMES,
 ): Promise<string | null> {
   const bundleName = EDITOR_APP_BUNDLES[editor] ?? EDITOR_APP_BUNDLES.zed
+  return findAppBundlePath(bundleName)
+}
+
+async function findAppBundlePath(bundleName: string): Promise<string | null> {
   const directCandidates = [
     path.join('/Applications', bundleName),
     path.join(app.getPath('home'), 'Applications', bundleName),
@@ -192,6 +207,44 @@ async function findEditorAppPath(
   } catch {
     return null
   }
+}
+
+async function getAppBundleIconDataUrl(bundlePath: string): Promise<string | null> {
+  try {
+    const icon = await app.getFileIcon(bundlePath, { size: 'normal' })
+    return icon.isEmpty() ? null : icon.toDataURL()
+  } catch {
+    return null
+  }
+}
+
+async function getTerminalAppIconDataUrl(appKind: TerminalSessionAppKind): Promise<string | null> {
+  if (appKind === 'terminal' || appKind === 'codex' || appKind === 'claude') {
+    return null
+  }
+
+  if (terminalAppIconCache.has(appKind)) {
+    return terminalAppIconCache.get(appKind) ?? null
+  }
+
+  const bundleName = TERMINAL_APP_BUNDLES[appKind]
+  const bundlePath = bundleName ? await findAppBundlePath(bundleName) : null
+  const iconDataUrl = bundlePath ? await getAppBundleIconDataUrl(bundlePath) : null
+  terminalAppIconCache.set(appKind, iconDataUrl)
+  return iconDataUrl
+}
+
+function extractTerminalTitle(data: string): string | null {
+  let nextTitle: string | null = null
+
+  for (const match of data.matchAll(TERMINAL_TITLE_PATTERN)) {
+    const resolvedTitle = match[1]?.trim()
+    if (resolvedTitle) {
+      nextTitle = resolvedTitle
+    }
+  }
+
+  return nextTitle
 }
 
 async function getEditorInfo(editor: keyof typeof EDITOR_APP_NAMES) {
@@ -269,7 +322,10 @@ async function getAvailableEditors() {
 function getTerminalSummary(session: TerminalSessionRecord) {
   return {
     id: session.id,
-    title: session.title,
+    title: session.terminalTitle || session.title,
+    terminalTitle: session.terminalTitle,
+    appKind: session.appKind,
+    appIconDataUrl: session.appIconDataUrl,
     cwd: session.cwd,
     shell: session.shell,
     createdAt: session.createdAt,
@@ -358,7 +414,87 @@ async function resolveProcessCwd(pid: number): Promise<string | null> {
   }
 }
 
-async function refreshTerminalCwds() {
+type ProcessSnapshot = {
+  pid: number
+  ppid: number
+  command: string
+  args: string
+}
+
+async function listProcesses(): Promise<ProcessSnapshot[]> {
+  try {
+    const { stdout } = await execFileAsync('ps', ['-ax', '-o', 'pid=,ppid=,comm=,args='], {
+      encoding: 'utf-8',
+      maxBuffer: 4 * 1024 * 1024,
+    })
+
+    return stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const match = line.match(/^(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/)
+        if (!match) {
+          return null
+        }
+
+        return {
+          pid: Number(match[1]),
+          ppid: Number(match[2]),
+          command: match[3],
+          args: match[4] ?? '',
+        }
+      })
+      .filter((entry): entry is ProcessSnapshot => entry !== null)
+  } catch {
+    return []
+  }
+}
+
+function getTerminalPresentationForProcess(session: TerminalSessionRecord, processes: ProcessSnapshot[]) {
+  if (typeof session.pid !== 'number') {
+    return { title: session.baseTitle, appKind: 'terminal' as TerminalSessionAppKind }
+  }
+
+  const descendants: ProcessSnapshot[] = []
+  const queue = [session.pid]
+
+  while (queue.length > 0) {
+    const parentPid = queue.shift()!
+    for (const process of processes) {
+      if (process.ppid !== parentPid) {
+        continue
+      }
+
+      descendants.push(process)
+      queue.push(process.pid)
+    }
+  }
+
+  const match = [...descendants]
+    .reverse()
+    .find((process) => {
+      const haystack = `${process.command} ${process.args}`.toLowerCase()
+      return haystack.includes('codex') || haystack.includes('claude')
+    })
+
+  if (!match) {
+    return { title: session.baseTitle, appKind: 'terminal' as TerminalSessionAppKind }
+  }
+
+  const haystack = `${match.command} ${match.args}`.toLowerCase()
+  if (haystack.includes('codex')) {
+    return { title: 'Codex', appKind: 'codex' as TerminalSessionAppKind }
+  }
+
+  if (haystack.includes('claude')) {
+    return { title: 'Claude', appKind: 'claude' as TerminalSessionAppKind }
+  }
+
+  return { title: session.baseTitle, appKind: 'terminal' as TerminalSessionAppKind }
+}
+
+async function refreshTerminalMetadata() {
   const runningSessions = [...terminalSessions.values()].filter(
     (session) => session.status === 'running' && typeof session.pid === 'number',
   )
@@ -368,16 +504,34 @@ async function refreshTerminalCwds() {
   }
 
   let hasChanges = false
+  const processes = await listProcesses()
   const cwdResults = await Promise.all(
     runningSessions.map(async (session) => {
       const cwd = await resolveProcessCwd(session.pid!)
-      return { session, cwd }
+      const presentation = getTerminalPresentationForProcess(session, processes)
+      const appIconDataUrl = await getTerminalAppIconDataUrl(presentation.appKind)
+      return { session, cwd, presentation, appIconDataUrl }
     }),
   )
 
   for (const result of cwdResults) {
     if (result.cwd && result.cwd !== result.session.cwd) {
       result.session.cwd = result.cwd
+      hasChanges = true
+    }
+
+    if (result.presentation.title !== result.session.title) {
+      result.session.title = result.presentation.title
+      hasChanges = true
+    }
+
+    if (result.presentation.appKind !== result.session.appKind) {
+      result.session.appKind = result.presentation.appKind
+      hasChanges = true
+    }
+
+    if (result.appIconDataUrl !== result.session.appIconDataUrl) {
+      result.session.appIconDataUrl = result.appIconDataUrl
       hasChanges = true
     }
   }
@@ -405,7 +559,7 @@ function ensureTerminalCwdWatcher() {
 
   if (!terminalCwdInterval) {
     terminalCwdInterval = setInterval(() => {
-      void refreshTerminalCwds()
+      void refreshTerminalMetadata()
     }, TERMINAL_CWD_REFRESH_MS)
   }
 }
@@ -452,6 +606,10 @@ async function createTerminalSession(initialCwd?: string) {
   const session: TerminalSessionRecord = {
     id: sessionId,
     title: `Terminal ${++terminalLabelCounter}`,
+    baseTitle: `Terminal ${terminalLabelCounter}`,
+    terminalTitle: null,
+    appKind: 'terminal',
+    appIconDataUrl: null,
     cwd,
     shell: shellPath,
     createdAt: Date.now(),
@@ -475,6 +633,12 @@ async function createTerminalSession(initialCwd?: string) {
     currentSession.buffer = appendTerminalBuffer(currentSession.buffer, data)
     currentSession.sequence += 1
     sendTerminalData(sessionId, currentSession.sequence, data)
+
+    const terminalTitle = extractTerminalTitle(data)
+    if (terminalTitle && terminalTitle !== currentSession.terminalTitle) {
+      currentSession.terminalTitle = terminalTitle
+      sendTerminalSessionsChanged()
+    }
   })
 
   ptyProcess.onExit(({ exitCode, signal }) => {
@@ -494,7 +658,7 @@ async function createTerminalSession(initialCwd?: string) {
 
   ensureTerminalCwdWatcher()
   sendTerminalSessionsChanged()
-  void refreshTerminalCwds()
+  void refreshTerminalMetadata()
 
   return getTerminalSummary(session)
 }

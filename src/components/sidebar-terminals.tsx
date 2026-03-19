@@ -1,7 +1,8 @@
 import type { MouseEvent } from 'react'
-import { Plus, SquareTerminal, X } from 'lucide-react'
+import { Plus, X } from 'lucide-react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 
+import { TerminalSessionIcon } from '@/components/terminal-session-icon'
 import { useTerminalSessions } from '@/hooks/use-terminal-sessions'
 import {
   SidebarGroup,
@@ -70,7 +71,11 @@ export function SidebarTerminals({
                   data-active={location.pathname === `/terminals/${session.id}`}
                 >
                   <Link to={`/terminals/${session.id}`}>
-                    <SquareTerminal />
+                    <TerminalSessionIcon
+                      appKind={session.appKind}
+                      appIconDataUrl={session.appIconDataUrl}
+                      className="size-4 shrink-0 rounded-[4px]"
+                    />
                     <span className="min-w-0 flex-1 truncate">
                       {session.title}
                     </span>
