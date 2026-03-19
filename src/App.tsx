@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route } from 'react-router-dom'
 import { AppSidebar } from '@/components/app-sidebar'
+import { TerminalSessionsProvider } from '@/components/terminal-sessions-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import ServicePage from '@/pages/service'
 import SettingsPage from '@/pages/settings'
+import TerminalsPage from '@/pages/terminals'
 import WelcomePage from '@/pages/welcome'
 
 function Page() {
@@ -33,16 +35,20 @@ function App() {
   }
 
   return (
-    <SidebarProvider className="h-screen overflow-hidden">
-      <AppSidebar />
-      <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
-        <Routes>
-          <Route path="/" element={<Page />} />
-          <Route path="/services/:serviceName" element={<ServicePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-        </Routes>
-      </SidebarInset>
-    </SidebarProvider>
+    <TerminalSessionsProvider>
+      <SidebarProvider className="h-screen overflow-hidden">
+        <AppSidebar />
+        <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
+          <Routes>
+            <Route path="/" element={<Page />} />
+            <Route path="/services/:serviceName" element={<ServicePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/terminals" element={<TerminalsPage />} />
+            <Route path="/terminals/:terminalId" element={<TerminalsPage />} />
+          </Routes>
+        </SidebarInset>
+      </SidebarProvider>
+    </TerminalSessionsProvider>
   )
 }
 

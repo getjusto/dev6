@@ -18,7 +18,7 @@ export default defineConfig({
               formats: ['cjs'],
             },
             rollupOptions: {
-              external: ['electron-updater'],
+              external: ['electron-updater', '@homebridge/node-pty-prebuilt-multiarch'],
               output: {
                 entryFileNames: '[name].cjs',
               },

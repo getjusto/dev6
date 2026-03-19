@@ -5,6 +5,18 @@ type UpdateStatusPayload = {
   detail?: string
 }
 
+type TerminalSessionSummaryPayload = {
+  id: string
+  title: string
+  cwd: string
+  shell: string
+  createdAt: number
+  status: 'running' | 'exited'
+  pid: number | null
+  exitCode: number | null
+  signal: number | null
+}
+
 contextBridge.exposeInMainWorld('desktop', {
   getAppInfo: () => ipcRenderer.invoke('app:get-info'),
   getUpdateStatus: () => ipcRenderer.invoke('updates:get-status'),
@@ -38,6 +50,41 @@ contextBridge.exposeInMainWorld('desktop', {
   getServiceLogs: (serviceName: string, lineCount?: number) =>
     ipcRenderer.invoke('dev5:logs', serviceName, lineCount),
   getCurrentBranch: () => ipcRenderer.invoke('git:get-current-branch'),
+  listTerminalSessions: () => ipcRenderer.invoke('terminals:list'),
+  createTerminalSession: (options?: { cwd?: string }) => ipcRenderer.invoke('terminals:create', options),
+  closeTerminalSession: (sessionId: string) => ipcRenderer.invoke('terminals:close', sessionId),
+  getTerminalSessionSnapshot: (sessionId: string) => ipcRenderer.invoke('terminals:snapshot', sessionId),
+  writeTerminalSession: (sessionId: string, data: string) =>
+    ipcRenderer.send('terminals:write', sessionId, data),
+  resizeTerminalSession: (sessionId: string, cols: number, rows: number) =>
+    ipcRenderer.send('terminals:resize', sessionId, cols, rows),
+  onTerminalSessionData: (
+    callback: (payload: { sessionId: string; sequence: number; data: string }) => void,
+  ) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { sessionId: string; sequence: number; data: string },
+    ) => {
+      callback(payload)
+    }
+
+    ipcRenderer.on('terminals:data', listener)
+
+    return () => {
+      ipcRenderer.removeListener('terminals:data', listener)
+    }
+  },
+  onTerminalSessionsChanged: (callback: (sessions: TerminalSessionSummaryPayload[]) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, sessions: TerminalSessionSummaryPayload[]) => {
+      callback(sessions)
+    }
+
+    ipcRenderer.on('terminals:sessions-changed', listener)
+
+    return () => {
+      ipcRenderer.removeListener('terminals:sessions-changed', listener)
+    }
+  },
   openServicesInEditor: (editor?: 'zed' | 'vscode' | 'cursor') =>
     ipcRenderer.invoke('services:open-editor', editor),
   getEditorInfo: (editor?: 'zed' | 'vscode' | 'cursor') =>

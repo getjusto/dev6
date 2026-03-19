@@ -1,8 +1,9 @@
 import * as React from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { Loader2, Settings, Square } from 'lucide-react'
 
 import { SidebarServices } from '@/components/sidebar-services'
+import { SidebarTerminals } from '@/components/sidebar-terminals'
 import isoDarkUrl from '@/assets/iso-dark.svg'
 import isoWhiteUrl from '@/assets/iso-white.svg'
 import cursorIconUrl from '@/assets/editor-icons/cursor.png'
@@ -41,6 +42,7 @@ function editorIconPath(editor: 'zed' | 'vscode' | 'cursor') {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const navigate = useNavigate()
   const [branchName, setBranchName] = React.useState('Dev6')
   const [isOpeningEditor, setIsOpeningEditor] = React.useState(false)
   const [isStoppingAll, setIsStoppingAll] = React.useState(false)
@@ -110,6 +112,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }
 
+  async function handleCreateTerminal() {
+    const session = await window.desktop.createTerminalSession()
+    navigate(`/terminals/${session.id}`)
+  }
+
   return (
     <Sidebar
       variant="inset"
@@ -143,6 +150,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent className="min-h-0 overflow-auto">
+        <SidebarTerminals onCreateTerminal={handleCreateTerminal} />
         <SidebarServices />
       </SidebarContent>
       <SidebarFooter>

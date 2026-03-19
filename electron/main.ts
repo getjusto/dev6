@@ -1,20 +1,44 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import { execFile, execSync } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
 
 const isDev = !app.isPackaged
 let updateState = 'idle'
 const execFileAsync = promisify(execFile)
 let commandEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
+const MAX_TERMINAL_BUFFER_CHARS = 2_000_000
+const TERMINAL_CWD_REFRESH_MS = 2000
 const EDITOR_APP_NAMES = {
   zed: 'Zed',
   vscode: 'Visual Studio Code',
   cursor: 'Cursor',
 } as const
+type TerminalSessionStatus = 'running' | 'exited'
+
+type TerminalSessionRecord = {
+  id: string
+  title: string
+  cwd: string
+  shell: string
+  createdAt: number
+  status: TerminalSessionStatus
+  pid: number | null
+  sequence: number
+  buffer: string
+  exitCode: number | null
+  signal: number | null
+  ptyProcess: pty.IPty | null
+}
+
+const terminalSessions = new Map<string, TerminalSessionRecord>()
+let terminalLabelCounter = 0
+let terminalCwdInterval: NodeJS.Timeout | null = null
 const EDITOR_APP_BUNDLES = {
   zed: 'Zed.app',
   vscode: 'Visual Studio Code.app',
@@ -242,6 +266,282 @@ async function getAvailableEditors() {
   return results.filter((editor): editor is keyof typeof EDITOR_APP_NAMES => editor !== null)
 }
 
+function getTerminalSummary(session: TerminalSessionRecord) {
+  return {
+    id: session.id,
+    title: session.title,
+    cwd: session.cwd,
+    shell: session.shell,
+    createdAt: session.createdAt,
+    status: session.status,
+    pid: session.pid,
+    exitCode: session.exitCode,
+    signal: session.signal,
+  }
+}
+
+function listTerminalSessions() {
+  return [...terminalSessions.values()]
+    .sort((left, right) => left.createdAt - right.createdAt)
+    .map(getTerminalSummary)
+}
+
+function sendTerminalSessionsChanged() {
+  const sessions = listTerminalSessions()
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('terminals:sessions-changed', sessions)
+  }
+}
+
+function sendTerminalData(sessionId: string, sequence: number, data: string) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('terminals:data', { sessionId, sequence, data })
+  }
+}
+
+function appendTerminalBuffer(buffer: string, chunk: string) {
+  if (buffer.length + chunk.length <= MAX_TERMINAL_BUFFER_CHARS) {
+    return buffer + chunk
+  }
+
+  const nextBuffer = buffer + chunk
+  const trimIndex = nextBuffer.length - MAX_TERMINAL_BUFFER_CHARS
+  const newlineIndex = nextBuffer.indexOf('\n', trimIndex)
+
+  return nextBuffer.slice(newlineIndex === -1 ? trimIndex : newlineIndex + 1)
+}
+
+function getShellLaunchArgs(shellPath: string) {
+  const shellName = path.basename(shellPath)
+
+  if (shellName === 'zsh' || shellName === 'bash') {
+    return ['-il']
+  }
+
+  return ['-i']
+}
+
+function getDefaultTerminalCwd() {
+  try {
+    return getServicesPath()
+  } catch {
+    return app.getPath('home')
+  }
+}
+
+function resolveTerminalCwd(candidate?: string) {
+  const nextCwd = candidate && fs.existsSync(candidate) ? candidate : getDefaultTerminalCwd()
+
+  try {
+    const stat = fs.statSync(nextCwd)
+    return stat.isDirectory() ? nextCwd : getDefaultTerminalCwd()
+  } catch {
+    return getDefaultTerminalCwd()
+  }
+}
+
+async function resolveProcessCwd(pid: number): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], {
+      encoding: 'utf-8',
+      maxBuffer: 1024 * 1024,
+    })
+    const cwdLine = stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .find((line) => line.startsWith('n'))
+
+    return cwdLine ? cwdLine.slice(1) : null
+  } catch {
+    return null
+  }
+}
+
+async function refreshTerminalCwds() {
+  const runningSessions = [...terminalSessions.values()].filter(
+    (session) => session.status === 'running' && typeof session.pid === 'number',
+  )
+
+  if (runningSessions.length === 0) {
+    return
+  }
+
+  let hasChanges = false
+  const cwdResults = await Promise.all(
+    runningSessions.map(async (session) => {
+      const cwd = await resolveProcessCwd(session.pid!)
+      return { session, cwd }
+    }),
+  )
+
+  for (const result of cwdResults) {
+    if (result.cwd && result.cwd !== result.session.cwd) {
+      result.session.cwd = result.cwd
+      hasChanges = true
+    }
+  }
+
+  if (hasChanges) {
+    sendTerminalSessionsChanged()
+  }
+}
+
+function stopTerminalCwdWatcher() {
+  if (terminalCwdInterval) {
+    clearInterval(terminalCwdInterval)
+    terminalCwdInterval = null
+  }
+}
+
+function ensureTerminalCwdWatcher() {
+  const hasRunningSessions = [...terminalSessions.values()].some(
+    (session) => session.status === 'running',
+  )
+  if (!hasRunningSessions) {
+    stopTerminalCwdWatcher()
+    return
+  }
+
+  if (!terminalCwdInterval) {
+    terminalCwdInterval = setInterval(() => {
+      void refreshTerminalCwds()
+    }, TERMINAL_CWD_REFRESH_MS)
+  }
+}
+
+function disposeTerminalSession(session: TerminalSessionRecord) {
+  if (session.ptyProcess) {
+    try {
+      session.ptyProcess.kill()
+    } catch {
+      // noop
+    }
+    session.ptyProcess = null
+  }
+}
+
+function disposeAllTerminalSessions() {
+  for (const session of terminalSessions.values()) {
+    disposeTerminalSession(session)
+  }
+
+  terminalSessions.clear()
+  stopTerminalCwdWatcher()
+}
+
+async function createTerminalSession(initialCwd?: string) {
+  const env = await getCommandEnv()
+  const shellPath = env.SHELL || '/bin/zsh'
+  const cwd = resolveTerminalCwd(initialCwd)
+  const sessionId = `term_${crypto.randomUUID()}`
+  const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath), {
+    name: 'xterm-256color',
+    cols: 80,
+    rows: 24,
+    cwd,
+    env: {
+      ...env,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      TERM_PROGRAM: 'dev6',
+      TERM_PROGRAM_VERSION: app.getVersion(),
+    },
+  })
+
+  const session: TerminalSessionRecord = {
+    id: sessionId,
+    title: `Terminal ${++terminalLabelCounter}`,
+    cwd,
+    shell: shellPath,
+    createdAt: Date.now(),
+    status: 'running',
+    pid: ptyProcess.pid,
+    sequence: 0,
+    buffer: '',
+    exitCode: null,
+    signal: null,
+    ptyProcess,
+  }
+
+  terminalSessions.set(sessionId, session)
+
+  ptyProcess.onData((data) => {
+    const currentSession = terminalSessions.get(sessionId)
+    if (!currentSession) {
+      return
+    }
+
+    currentSession.buffer = appendTerminalBuffer(currentSession.buffer, data)
+    currentSession.sequence += 1
+    sendTerminalData(sessionId, currentSession.sequence, data)
+  })
+
+  ptyProcess.onExit(({ exitCode, signal }) => {
+    const currentSession = terminalSessions.get(sessionId)
+    if (!currentSession) {
+      return
+    }
+
+    currentSession.status = 'exited'
+    currentSession.exitCode = exitCode
+    currentSession.signal = signal ?? null
+    currentSession.pid = null
+    currentSession.ptyProcess = null
+    ensureTerminalCwdWatcher()
+    sendTerminalSessionsChanged()
+  })
+
+  ensureTerminalCwdWatcher()
+  sendTerminalSessionsChanged()
+  void refreshTerminalCwds()
+
+  return getTerminalSummary(session)
+}
+
+function closeTerminalSession(sessionId: string) {
+  const session = terminalSessions.get(sessionId)
+  if (!session) {
+    return
+  }
+
+  terminalSessions.delete(sessionId)
+  disposeTerminalSession(session)
+  ensureTerminalCwdWatcher()
+  sendTerminalSessionsChanged()
+}
+
+function getTerminalSessionSnapshot(sessionId: string) {
+  const session = terminalSessions.get(sessionId)
+  if (!session) {
+    throw new Error('Terminal session not found.')
+  }
+
+  return {
+    sequence: session.sequence,
+    buffer: session.buffer,
+    session: getTerminalSummary(session),
+  }
+}
+
+function writeTerminalSession(sessionId: string, data: string) {
+  const session = terminalSessions.get(sessionId)
+  if (!session || !session.ptyProcess) {
+    throw new Error('Terminal session is not running.')
+  }
+
+  session.ptyProcess.write(data)
+}
+
+function resizeTerminalSession(sessionId: string, cols: number, rows: number) {
+  const session = terminalSessions.get(sessionId)
+  if (!session || !session.ptyProcess || cols <= 0 || rows <= 0) {
+    return
+  }
+
+  session.ptyProcess.resize(cols, rows)
+}
+
 async function callDev5(...args: string[]): Promise<unknown> {
   const servicesPath = getServicesPath()
   const env = await getCommandEnv()
@@ -464,6 +764,31 @@ app.whenReady().then(() => {
     return readDev5Logs(serviceName, lineCount)
   })
 
+  ipcMain.handle('terminals:list', async () => {
+    return listTerminalSessions()
+  })
+
+  ipcMain.handle('terminals:create', async (_event, options?: { cwd?: string }) => {
+    return createTerminalSession(options?.cwd)
+  })
+
+  ipcMain.handle('terminals:close', async (_event, sessionId: string) => {
+    closeTerminalSession(sessionId)
+    return { ok: true }
+  })
+
+  ipcMain.handle('terminals:snapshot', async (_event, sessionId: string) => {
+    return getTerminalSessionSnapshot(sessionId)
+  })
+
+  ipcMain.on('terminals:write', (_event, sessionId: string, data: string) => {
+    writeTerminalSession(sessionId, data)
+  })
+
+  ipcMain.on('terminals:resize', (_event, sessionId: string, cols: number, rows: number) => {
+    resizeTerminalSession(sessionId, cols, rows)
+  })
+
   ipcMain.handle(
     'services:open-editor',
     async (_event, editor: keyof typeof EDITOR_APP_NAMES = 'zed') => {
@@ -529,4 +854,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  disposeAllTerminalSessions()
 })

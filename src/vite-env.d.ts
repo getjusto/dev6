@@ -25,6 +25,30 @@ declare global {
 		error?: string;
 	}
 
+	interface TerminalSessionSummary {
+		id: string;
+		title: string;
+		cwd: string;
+		shell: string;
+		createdAt: number;
+		status: "running" | "exited";
+		pid: number | null;
+		exitCode: number | null;
+		signal: number | null;
+	}
+
+	interface TerminalSessionSnapshot {
+		sequence: number;
+		buffer: string;
+		session: TerminalSessionSummary;
+	}
+
+	interface TerminalSessionDataEvent {
+		sessionId: string;
+		sequence: number;
+		data: string;
+	}
+
 	interface Dev5ServiceStatus {
 		dir_name: string;
 		service_name: string;
@@ -55,6 +79,26 @@ declare global {
 			lineCount?: number,
 		) => Promise<string>;
 		getCurrentBranch: () => Promise<string | null>;
+		listTerminalSessions: () => Promise<TerminalSessionSummary[]>;
+		createTerminalSession: (options?: {
+			cwd?: string;
+		}) => Promise<TerminalSessionSummary>;
+		closeTerminalSession: (sessionId: string) => Promise<{ ok: boolean }>;
+		getTerminalSessionSnapshot: (
+			sessionId: string,
+		) => Promise<TerminalSessionSnapshot>;
+		writeTerminalSession: (sessionId: string, data: string) => void;
+		resizeTerminalSession: (
+			sessionId: string,
+			cols: number,
+			rows: number,
+		) => void;
+		onTerminalSessionData: (
+			callback: (payload: TerminalSessionDataEvent) => void,
+		) => () => void;
+		onTerminalSessionsChanged: (
+			callback: (sessions: TerminalSessionSummary[]) => void,
+		) => () => void;
 		openServicesInEditor: (
 			editor?: "zed" | "vscode" | "cursor",
 		) => Promise<{ ok: boolean }>;
