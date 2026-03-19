@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import {
 	SidebarGroup,
@@ -25,21 +27,36 @@ function getServiceState(service: Dev5ServiceStatus): "on" | "off" | "error" {
 	return "on";
 }
 
+function isServiceTransitioning(service: Dev5ServiceStatus) {
+	return service.status === "loadingOn" || service.status === "loadingOff";
+}
+
 function ServiceRow({
 	service,
 	isPending,
+	isActive,
 	onToggle,
+	onSelect,
 }: {
 	service: Dev5ServiceStatus;
 	isPending: boolean;
+	isActive: boolean;
 	onToggle: (service: Dev5ServiceStatus) => void;
+	onSelect: (service: Dev5ServiceStatus) => void;
 }) {
 	const serviceState = getServiceState(service);
+	const isTransitioning = isServiceTransitioning(service) || isPending;
 	const isOnline = service.status === "on";
 
 	return (
 		<SidebarMenuItem>
-			<div className="flex h-7.5 items-center gap-2 rounded-md px-2 text-xs hover:bg-sidebar-accent hover:text-sidebar-accent-foreground">
+			<div
+				className={cn(
+					"flex h-7.5 cursor-pointer items-center gap-2 rounded-md px-2 text-xs hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+					isActive && "bg-sidebar-accent text-sidebar-accent-foreground",
+				)}
+				onClick={() => onSelect(service)}
+			>
 				<button
 					type="button"
 					aria-label={
@@ -48,21 +65,27 @@ function ServiceRow({
 							: `Start ${service.service_name}`
 					}
 					disabled={isPending}
-					onClick={() => onToggle(service)}
+					onClick={(event) => {
+						event.stopPropagation();
+						void onToggle(service);
+					}}
 					className={cn(
 						"inline-flex size-5 shrink-0 appearance-none items-center justify-center rounded-full border border-sidebar-border bg-background shadow-none transition-[transform,background-color,border-color] hover:bg-background active:scale-95 disabled:cursor-not-allowed disabled:opacity-50",
 					)}
 				>
-					<span
-						aria-hidden="true"
-						className={cn(
-							"size-2 rounded-full",
-							isPending && "animate-pulse bg-amber-500",
-							!isPending && serviceState === "on" && "bg-emerald-500",
-							!isPending && serviceState === "off" && "bg-muted-foreground/45",
-							!isPending && serviceState === "error" && "bg-red-500",
-						)}
-					/>
+					{isTransitioning ? (
+						<Loader2 aria-hidden="true" className="size-3 animate-spin text-amber-500" />
+					) : (
+						<span
+							aria-hidden="true"
+							className={cn(
+								"size-2 rounded-full",
+								serviceState === "on" && "bg-emerald-500",
+								serviceState === "off" && "bg-muted-foreground/45",
+								serviceState === "error" && "bg-red-500",
+							)}
+						/>
+					)}
 				</button>
 				<span className="min-w-0 flex-1 truncate text-[13px]">
 					{service.service_name}
@@ -76,6 +99,8 @@ function ServiceRow({
 }
 
 export function SidebarServices() {
+	const navigate = useNavigate();
+	const location = useLocation();
 	const [services, setServices] = useState<Dev5ServiceStatus[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
@@ -152,6 +177,10 @@ export function SidebarServices() {
 		}
 	}
 
+	function handleSelect(service: Dev5ServiceStatus) {
+		navigate(`/services/${service.service_name}`);
+	}
+
 	const onlineCount = services.filter(
 		(service) => service.status === "on",
 	).length;
@@ -180,7 +209,11 @@ export function SidebarServices() {
 								key={`${service.dir_name}:${service.service_name}`}
 								service={service}
 								isPending={pendingServices.includes(service.service_name)}
+								isActive={
+									location.pathname === `/services/${service.service_name}`
+								}
 								onToggle={handleToggle}
+								onSelect={handleSelect}
 							/>
 						))}
 					</SidebarMenu>
