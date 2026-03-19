@@ -6,6 +6,7 @@ files:
   - dist/**
   - dist-electron/**
 asar: true
+icon: build/icon.icns
 mac:
   category: public.app-category.productivity
   target:
