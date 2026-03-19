@@ -363,7 +363,7 @@ function setupUpdater() {
   autoUpdater.autoInstallOnAppQuit = true
 
   autoUpdater.on('checking-for-update', () => {
-    sendUpdateState('checking', 'Checking S3 for a new macOS build.')
+    sendUpdateState('checking', 'Checking GitHub Releases for a new macOS build.')
   })
 
   autoUpdater.on('update-available', (info) => {
