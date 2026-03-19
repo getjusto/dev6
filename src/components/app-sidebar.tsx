@@ -3,6 +3,11 @@ import { Link } from 'react-router-dom'
 import { Loader2, Settings, Square } from 'lucide-react'
 
 import { SidebarServices } from '@/components/sidebar-services'
+import isoDarkUrl from '@/assets/iso-dark.svg'
+import isoWhiteUrl from '@/assets/iso-white.svg'
+import cursorIconUrl from '@/assets/editor-icons/cursor.png'
+import vscodeIconUrl from '@/assets/editor-icons/vscode.png'
+import zedIconUrl from '@/assets/editor-icons/zed.png'
 import {
   Sidebar,
   SidebarContent,
@@ -27,11 +32,11 @@ function editorLabel(editor: 'zed' | 'vscode' | 'cursor') {
 function editorIconPath(editor: 'zed' | 'vscode' | 'cursor') {
   switch (editor) {
     case 'vscode':
-      return '/editor-icons/vscode.png'
+      return vscodeIconUrl
     case 'cursor':
-      return '/editor-icons/cursor.png'
+      return cursorIconUrl
     default:
-      return '/editor-icons/zed.png'
+      return zedIconUrl
   }
 }
 
@@ -119,12 +124,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton size="lg" asChild>
               <Link to="/">
                 <img
-                  src="/iso-dark.svg"
+                  src={isoDarkUrl}
                   alt="Justo"
                   className="size-8 dark:hidden"
                 />
                 <img
-                  src="/iso-white.svg"
+                  src={isoWhiteUrl}
                   alt="Justo"
                   className="hidden size-8 dark:block"
                 />

@@ -34,8 +34,8 @@ export default function WelcomePage({ onComplete }: { onComplete: () => void }) 
     <div className="flex h-screen flex-col items-center justify-center gap-6 p-8">
       <div className="drag-region fixed inset-x-0 top-0 h-[52px]" />
 
-      <img src="/iso-dark.svg" alt="Justo" className="size-16 dark:hidden" />
-      <img src="/iso-white.svg" alt="Justo" className="hidden size-16 dark:block" />
+      <img src={isoDarkUrl} alt="Justo" className="size-16 dark:hidden" />
+      <img src={isoWhiteUrl} alt="Justo" className="hidden size-16 dark:block" />
 
       <div className="text-center">
         <h1 className="text-2xl font-semibold">Welcome to Dev6</h1>
@@ -83,3 +83,5 @@ export default function WelcomePage({ onComplete }: { onComplete: () => void }) 
     </div>
   )
 }
+import isoDarkUrl from '@/assets/iso-dark.svg'
+import isoWhiteUrl from '@/assets/iso-white.svg'
