@@ -10,7 +10,7 @@ if [ -f "$LOCAL_ENV_FILE" ]; then
   source "$LOCAL_ENV_FILE"
 fi
 
-export CSC_NAME="${CSC_NAME:-Developer ID Application: Orionsoft SpA (3CZ24HA8DS)}"
+export CSC_NAME="${CSC_NAME:-Orionsoft SpA (3CZ24HA8DS)}"
 
 if [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_PASSWORD:-}" ]; then
   export APPLE_APP_SPECIFIC_PASSWORD="$APPLE_PASSWORD"

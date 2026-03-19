@@ -39,6 +39,7 @@ For local publishing on the current maintainer machine, use:
 - `pnpm release:mac`
 
 That script reads the GitHub token from `gh auth token`, defaults `CSC_NAME` to `Developer ID Application: Orionsoft SpA (3CZ24HA8DS)`, and maps `APPLE_PASSWORD` to `APPLE_APP_SPECIFIC_PASSWORD` for compatibility with the existing `dev4` flow.
+That script reads the GitHub token from `gh auth token`, defaults `CSC_NAME` to `Orionsoft SpA (3CZ24HA8DS)`, and maps `APPLE_PASSWORD` to `APPLE_APP_SPECIFIC_PASSWORD` for compatibility with the existing `dev4` flow.
 
 To keep Apple credentials out of git, copy:
 
