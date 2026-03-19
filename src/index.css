@@ -5,8 +5,7 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --font-sans: "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial,
-    sans-serif;
+  --font-sans: "ui-sans-serif", "-apple-system", "system-ui", "Segoe UI", "Helvetica", "Apple Color Emoji", "Arial", "sans-serif", "Segoe UI Emoji", "Segoe UI Symbol";
   --radius: 0.625rem;
 }
 

@@ -28,8 +28,10 @@ function ServiceRow({
 		<SidebarMenuItem>
 			<SidebarMenuButton onClick={() => onSelect(service)}>
 				<ServiceStatus status={service.status} />
-				<span className="min-w-0 flex-1 truncate">{service.service_name}</span>
-				<span className="ml-auto shrink-0 font-mono text-muted-foreground">
+				<span className="min-w-0 flex-1 truncate font-medium">
+					{service.service_name}
+				</span>
+				<span className="ml-auto shrink-0 font-mono text-muted-foreground text-xs">
 					{service.port == null ? "—" : service.port}
 				</span>
 			</SidebarMenuButton>
