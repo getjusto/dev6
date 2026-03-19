@@ -388,6 +388,13 @@ function setupUpdater() {
   autoUpdater.on('error', (error) => {
     sendUpdateState('error', error == null ? 'Unknown updater error.' : error.message)
   })
+
+  // Check on startup, but keep downloads user-driven.
+  setTimeout(() => {
+    void autoUpdater.checkForUpdates().catch((error: unknown) => {
+      sendUpdateState('error', error instanceof Error ? error.message : 'Could not check for updates.')
+    })
+  }, 3000)
 }
 
 app.whenReady().then(() => {
