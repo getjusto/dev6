@@ -315,8 +315,8 @@ export default function ServicePage() {
 
   return (
     <>
-      <div className="drag-region h-[52px] shrink-0" />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+      <div className="drag-region absolute inset-x-0 top-0 z-10 h-[32px] shrink-0" />
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="border-b px-6 py-4">
           <div className="flex min-w-0 items-center justify-between gap-4">
             <div className="min-w-0">
