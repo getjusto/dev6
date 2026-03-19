@@ -40,6 +40,16 @@ For local publishing on the current maintainer machine, use:
 
 That script reads the GitHub token from `gh auth token`, defaults `CSC_NAME` to `Developer ID Application: Orionsoft SpA (3CZ24HA8DS)`, and maps `APPLE_PASSWORD` to `APPLE_APP_SPECIFIC_PASSWORD` for compatibility with the existing `dev4` flow.
 
+To keep Apple credentials out of git, copy:
+
+- `scripts/release-env.local.example.sh`
+
+to:
+
+- `scripts/release-env.local.sh`
+
+and fill in the local environment variables there. Files ending in `.local` are ignored by git in this repo.
+
 ## Shipping notes
 
 Before production distribution on macOS, add:

@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+LOCAL_ENV_FILE="$ROOT_DIR/scripts/release-env.local.sh"
+if [ -f "$LOCAL_ENV_FILE" ]; then
+  # shellcheck disable=SC1090
+  source "$LOCAL_ENV_FILE"
+fi
+
 export CSC_NAME="${CSC_NAME:-Developer ID Application: Orionsoft SpA (3CZ24HA8DS)}"
 
 if [ -z "${APPLE_APP_SPECIFIC_PASSWORD:-}" ] && [ -n "${APPLE_PASSWORD:-}" ]; then
