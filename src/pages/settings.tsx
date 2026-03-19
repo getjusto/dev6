@@ -7,11 +7,31 @@ import { Button } from '@/components/ui/button'
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme()
   const [servicesPath, setServicesPath] = useState<string | null>(null)
+  const [preferredEditor, setPreferredEditor] = useState<'zed' | 'vscode' | 'cursor'>('zed')
+  const [availableEditors, setAvailableEditors] = useState<Array<'zed' | 'vscode' | 'cursor'>>([])
 
   useEffect(() => {
-    window.desktop.getSettings().then((s) => {
-      setServicesPath(s.servicesPath ?? null)
-    })
+    Promise.all([window.desktop.getSettings(), window.desktop.getAvailableEditors()]).then(
+      async ([settings, editors]) => {
+        setServicesPath(settings.servicesPath ?? null)
+        setAvailableEditors(editors)
+
+        const fallbackEditor = editors[0] ?? 'zed'
+        const nextPreferredEditor =
+          settings.preferredEditor && editors.includes(settings.preferredEditor)
+            ? settings.preferredEditor
+            : fallbackEditor
+
+        setPreferredEditor(nextPreferredEditor)
+
+        if (
+          editors.length > 0 &&
+          settings.preferredEditor !== nextPreferredEditor
+        ) {
+          await window.desktop.setSettings({ preferredEditor: nextPreferredEditor })
+        }
+      },
+    )
   }, [])
 
   async function handleChangePath() {
@@ -23,6 +43,12 @@ export default function SettingsPage() {
       await window.desktop.setSettings({ servicesPath: selected })
       setServicesPath(selected)
     }
+  }
+
+  async function handleEditorChange(value: string) {
+    const nextEditor = value as 'zed' | 'vscode' | 'cursor'
+    setPreferredEditor(nextEditor)
+    await window.desktop.setSettings({ preferredEditor: nextEditor })
   }
 
   return (
@@ -78,6 +104,30 @@ export default function SettingsPage() {
                 </TabsTrigger>
               </TabsList>
             </Tabs>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-sm font-medium">Editor</h3>
+              <p className="text-sm text-muted-foreground">
+                Choose the app used to open the services folder.
+              </p>
+            </div>
+            {availableEditors.length > 0 ? (
+              <Tabs value={preferredEditor} onValueChange={handleEditorChange}>
+                <TabsList>
+                  {availableEditors.map((editor) => (
+                    <TabsTrigger key={editor} value={editor}>
+                      {editor === 'vscode' ? 'VS Code' : editor === 'cursor' ? 'Cursor' : 'Zed'}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            ) : (
+              <div className="text-sm text-muted-foreground">
+                No supported editor app was found on this Mac.
+              </div>
+            )}
           </div>
         </div>
       </div>

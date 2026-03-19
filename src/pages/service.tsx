@@ -151,6 +151,7 @@ export default function ServicePage() {
   const [isToggling, setIsToggling] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const isRefreshingRef = useRef(false)
+  const refreshVersionRef = useRef(0)
   const logViewportRef = useRef<HTMLDivElement | null>(null)
   const shouldFollowRef = useRef(true)
   const matchRefs = useRef<(HTMLSpanElement | null)[]>([])
@@ -162,11 +163,16 @@ export default function ServicePage() {
     setIsAtBottom(nextIsAtBottom)
   }
 
-  async function refreshServiceStatus() {
-    if (!serviceName) return
+  async function refreshServiceStatus(currentServiceName: string, refreshVersion: number) {
+    if (!currentServiceName) return
 
     const nextServices = await window.desktop.getServicesStatus()
-    const nextService = nextServices.find((entry) => entry.service_name === serviceName) ?? null
+    if (refreshVersion !== refreshVersionRef.current) {
+      return
+    }
+
+    const nextService =
+      nextServices.find((entry) => entry.service_name === currentServiceName) ?? null
     setService(nextService)
   }
 
@@ -175,6 +181,8 @@ export default function ServicePage() {
       return
     }
 
+    const currentServiceName = serviceName
+    const refreshVersion = refreshVersionRef.current
     isRefreshingRef.current = true
 
     if (showLoading) {
@@ -188,21 +196,33 @@ export default function ServicePage() {
       }
 
       const [nextLogs] = await Promise.all([
-        window.desktop.getServiceLogs(serviceName, 5000),
-        refreshServiceStatus(),
+        window.desktop.getServiceLogs(currentServiceName, 5000),
+        refreshServiceStatus(currentServiceName, refreshVersion),
       ])
+
+      if (refreshVersion !== refreshVersionRef.current) {
+        return
+      }
 
       setLogs(nextLogs)
       setError(null)
     } catch (loadError) {
+      if (refreshVersion !== refreshVersionRef.current) {
+        return
+      }
+
       setError(loadError instanceof Error ? loadError.message : 'Could not load logs.')
     } finally {
-      isRefreshingRef.current = false
-      setIsLoadingLogs(false)
+      if (refreshVersion === refreshVersionRef.current) {
+        isRefreshingRef.current = false
+        setIsLoadingLogs(false)
+      }
     }
   }
 
   useEffect(() => {
+    refreshVersionRef.current += 1
+    isRefreshingRef.current = false
     shouldFollowRef.current = true
     setIsAtBottom(true)
     setIsLoadingLogs(true)
