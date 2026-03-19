@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { FolderOpen, Monitor, Moon, Sun } from 'lucide-react'
+import { Download, FolderOpen, Loader2, Monitor, Moon, RefreshCw, Sun } from 'lucide-react'
 import { useTheme } from '@/components/theme-provider'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
@@ -9,12 +9,23 @@ export default function SettingsPage() {
   const [servicesPath, setServicesPath] = useState<string | null>(null)
   const [preferredEditor, setPreferredEditor] = useState<'zed' | 'vscode' | 'cursor'>('zed')
   const [availableEditors, setAvailableEditors] = useState<Array<'zed' | 'vscode' | 'cursor'>>([])
+  const [appVersion, setAppVersion] = useState<string | null>(null)
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>({ status: 'idle' })
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false)
+  const [isDownloadingUpdate, setIsDownloadingUpdate] = useState(false)
 
   useEffect(() => {
-    Promise.all([window.desktop.getSettings(), window.desktop.getAvailableEditors()]).then(
-      async ([settings, editors]) => {
+    Promise.all([
+      window.desktop.getSettings(),
+      window.desktop.getAvailableEditors(),
+      window.desktop.getAppInfo(),
+      window.desktop.getUpdateStatus(),
+    ]).then(
+      async ([settings, editors, appInfo, currentUpdateStatus]) => {
         setServicesPath(settings.servicesPath ?? null)
         setAvailableEditors(editors)
+        setAppVersion(appInfo.version)
+        setUpdateStatus(currentUpdateStatus)
 
         const fallbackEditor = editors[0] ?? 'zed'
         const nextPreferredEditor =
@@ -32,6 +43,22 @@ export default function SettingsPage() {
         }
       },
     )
+
+    const unsubscribe = window.desktop.onUpdateStatus((payload) => {
+      setUpdateStatus(payload)
+
+      if (payload.status !== 'checking') {
+        setIsCheckingUpdates(false)
+      }
+
+      if (payload.status !== 'downloading') {
+        setIsDownloadingUpdate(false)
+      }
+    })
+
+    return () => {
+      unsubscribe()
+    }
   }, [])
 
   async function handleChangePath() {
@@ -51,6 +78,37 @@ export default function SettingsPage() {
     await window.desktop.setSettings({ preferredEditor: nextEditor })
   }
 
+  async function handleCheckForUpdates() {
+    try {
+      setIsCheckingUpdates(true)
+      setUpdateStatus({ status: 'checking', detail: 'Checking for updates…' })
+      await window.desktop.checkForUpdates()
+    } catch (error) {
+      setUpdateStatus({
+        status: 'error',
+        detail: error instanceof Error ? error.message : 'Could not check for updates.',
+      })
+      setIsCheckingUpdates(false)
+    }
+  }
+
+  async function handleDownloadUpdate() {
+    try {
+      setIsDownloadingUpdate(true)
+      await window.desktop.downloadUpdate()
+    } catch (error) {
+      setUpdateStatus({
+        status: 'error',
+        detail: error instanceof Error ? error.message : 'Could not download the update.',
+      })
+      setIsDownloadingUpdate(false)
+    }
+  }
+
+  function isUpdateBusy() {
+    return isCheckingUpdates || isDownloadingUpdate
+  }
+
   return (
     <>
       <div className="drag-region h-[52px] shrink-0" />
@@ -61,6 +119,57 @@ export default function SettingsPage() {
             <p className="text-sm text-muted-foreground">
               Manage your application preferences.
             </p>
+          </div>
+
+          <div className="space-y-3">
+            <div>
+              <h3 className="text-sm font-medium">Software Updates</h3>
+              <p className="text-sm text-muted-foreground">
+                Check for newer builds published to GitHub Releases.
+              </p>
+            </div>
+            <div className="rounded-xl border bg-card p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="space-y-1">
+                  <div className="text-sm font-medium">
+                    Current version{appVersion ? `: ${appVersion}` : ''}
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    {updateStatus.detail ?? 'No update activity yet.'}
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  {updateStatus.status === 'available' ? (
+                    <Button size="sm" onClick={handleDownloadUpdate} disabled={isUpdateBusy()}>
+                      {isDownloadingUpdate ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Download className="size-4" />
+                      )}
+                      Download update
+                    </Button>
+                  ) : null}
+                  {updateStatus.status === 'downloaded' ? (
+                    <Button size="sm" onClick={() => void window.desktop.installUpdate()}>
+                      Install update
+                    </Button>
+                  ) : null}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleCheckForUpdates}
+                    disabled={isUpdateBusy()}
+                  >
+                    {isCheckingUpdates ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : (
+                      <RefreshCw className="size-4" />
+                    )}
+                    Check for updates
+                  </Button>
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="space-y-3">
