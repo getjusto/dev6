@@ -6,7 +6,7 @@ This is an electron app made for Engineer in Justo company to help them develop 
 
 - App: `dev6`
 - Stack: Electron, Vite, React, TypeScript
-- UI base: Tailwind CSS v4 and shadcn-style components
+- UI base: Tailwind CSS v4 and shadcn components
 - Packaging: `electron-builder`
 - Updates: `electron-updater`
 - Distribution target: macOS only

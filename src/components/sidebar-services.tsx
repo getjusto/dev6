@@ -1,40 +1,20 @@
+import { Plus, Power, PowerOff, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
-
+import { ServiceStatusButton } from "@/components/service-status-button";
 import {
 	SidebarGroup,
 	SidebarGroupContent,
 	SidebarGroupLabel,
 	SidebarMenu,
+	SidebarMenuAction,
+	SidebarMenuButton,
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { cn } from "@/lib/utils";
-
-function getServiceState(service: Dev5ServiceStatus): "on" | "off" | "error" {
-	if (service.status !== "on") {
-		return "off";
-	}
-
-	if (service.http_error || !service.port_open) {
-		return "error";
-	}
-
-	if (service.http_status_code != null && service.http_status_code >= 400) {
-		return "error";
-	}
-
-	return "on";
-}
-
-function isServiceTransitioning(service: Dev5ServiceStatus) {
-	return service.status === "loadingOn" || service.status === "loadingOff";
-}
+import { ServiceStatus } from "./service-status";
 
 function ServiceRow({
 	service,
-	isPending,
-	isActive,
 	onToggle,
 	onSelect,
 }: {
@@ -44,56 +24,28 @@ function ServiceRow({
 	onToggle: (service: Dev5ServiceStatus) => void;
 	onSelect: (service: Dev5ServiceStatus) => void;
 }) {
-	const serviceState = getServiceState(service);
-	const isTransitioning = isServiceTransitioning(service) || isPending;
-	const isOnline = service.status === "on";
-
 	return (
 		<SidebarMenuItem>
-			<div
-				className={cn(
-					"flex h-7.5 cursor-pointer items-center gap-2 rounded-md px-2 text-xs hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-					isActive && "bg-sidebar-accent text-sidebar-accent-foreground",
-				)}
-				onClick={() => onSelect(service)}
-			>
-				<button
-					type="button"
-					aria-label={
-						isOnline
-							? `Stop ${service.service_name}`
-							: `Start ${service.service_name}`
-					}
-					disabled={isPending}
-					onClick={(event) => {
-						event.stopPropagation();
-						void onToggle(service);
-					}}
-					className={cn(
-						"inline-flex size-5 shrink-0 appearance-none items-center justify-center rounded-full border border-sidebar-border bg-background shadow-none transition-[transform,background-color,border-color] hover:bg-background active:scale-95 disabled:cursor-not-allowed disabled:opacity-50",
-					)}
-				>
-					{isTransitioning ? (
-						<Loader2 aria-hidden="true" className="size-3 animate-spin text-amber-500" />
-					) : (
-						<span
-							aria-hidden="true"
-							className={cn(
-								"size-2 rounded-full",
-								serviceState === "on" && "bg-emerald-500",
-								serviceState === "off" && "bg-muted-foreground/45",
-								serviceState === "error" && "bg-red-500",
-							)}
-						/>
-					)}
-				</button>
-				<span className="min-w-0 flex-1 truncate text-[13px]">
-					{service.service_name}
-				</span>
-				<span className="ml-auto shrink-0 font-mono text-[11px] text-muted-foreground">
+			<SidebarMenuButton onClick={() => onSelect(service)}>
+				<ServiceStatus status={service.status} />
+				<span className="min-w-0 flex-1 truncate">{service.service_name}</span>
+				<span className="ml-auto shrink-0 font-mono text-muted-foreground">
 					{service.port == null ? "—" : service.port}
 				</span>
-			</div>
+			</SidebarMenuButton>
+			<SidebarMenuAction
+				onClick={() => {
+					onToggle(service);
+				}}
+			>
+				{service.status === "off" ? (
+					<Power />
+				) : service.status === "on" ? (
+					<PowerOff />
+				) : (
+					<RotateCcw />
+				)}
+			</SidebarMenuAction>
 		</SidebarMenuItem>
 	);
 }
@@ -159,7 +111,11 @@ export function SidebarServices() {
 
 			if (service.status === "on") {
 				await window.desktop.stopService(service.service_name);
+			} else if (service.status === "off") {
+				await window.desktop.startService(service.service_name);
 			} else {
+				await window.desktop.stopService(service.service_name);
+				await new Promise((resolve) => setTimeout(resolve, 1000));
 				await window.desktop.startService(service.service_name);
 			}
 
@@ -181,20 +137,9 @@ export function SidebarServices() {
 		navigate(`/services/${service.service_name}`);
 	}
 
-	const onlineCount = services.filter(
-		(service) => service.status === "on",
-	).length;
-
 	return (
 		<SidebarGroup className="px-2">
-			<SidebarGroupLabel>
-				Available Services
-				{!isLoading && !error ? (
-					<span className="ml-auto text-[10px] text-muted-foreground">
-						{onlineCount}/{services.length} on
-					</span>
-				) : null}
-			</SidebarGroupLabel>
+			<SidebarGroupLabel>Services</SidebarGroupLabel>
 			<SidebarGroupContent>
 				{isLoading ? (
 					<div className="px-2 py-1 text-xs text-muted-foreground">
