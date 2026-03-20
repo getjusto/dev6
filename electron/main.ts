@@ -7,11 +7,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
+import { AgentThreadManager } from './agent-threads'
 
 const isDev = !app.isPackaged
 let updateState = 'idle'
 const execFileAsync = promisify(execFile)
 let commandEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
+let mainWindow: BrowserWindow | null = null
 const MAX_TERMINAL_BUFFER_CHARS = 2_000_000
 const TERMINAL_CWD_REFRESH_MS = 2000
 const EDITOR_APP_NAMES = {
@@ -385,6 +387,13 @@ function getDefaultTerminalCwd() {
     return app.getPath('home')
   }
 }
+
+const agentThreadManager = new AgentThreadManager({
+  clientName: 'dev6',
+  clientVersion: app.getVersion(),
+  getCommandEnv,
+  getDefaultCwd: getDefaultTerminalCwd,
+})
 
 function resolveTerminalCwd(candidate?: string) {
   const nextCwd = candidate && fs.existsSync(candidate) ? candidate : getDefaultTerminalCwd()
@@ -786,6 +795,15 @@ function sendUpdateState(status: string, detail?: string) {
 }
 
 function createMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore()
+    }
+    mainWindow.show()
+    mainWindow.focus()
+    return mainWindow
+  }
+
   const appPath = app.getAppPath()
 
   const window = new BrowserWindow({
@@ -814,6 +832,13 @@ function createMainWindow() {
     void window.loadFile(path.join(appPath, 'dist/index.html'))
   }
 
+  window.on('closed', () => {
+    if (mainWindow === window) {
+      mainWindow = null
+    }
+  })
+
+  mainWindow = window
   return window
 }
 
@@ -862,6 +887,7 @@ function setupUpdater() {
 }
 
 app.whenReady().then(() => {
+  void agentThreadManager.restoreThreads()
   createMainWindow()
   setupUpdater()
 
@@ -953,6 +979,56 @@ app.whenReady().then(() => {
     resizeTerminalSession(sessionId, cols, rows)
   })
 
+  ipcMain.handle('agents:list', async () => {
+    return agentThreadManager.listThreads()
+  })
+
+  ipcMain.handle('agents:create', async () => {
+    return agentThreadManager.createThread()
+  })
+
+  ipcMain.handle(
+    'agents:update',
+    async (
+      _event,
+      threadId: string,
+      patch: Partial<{
+        title: string
+        launchCommand: string
+        cwd: string
+      }>,
+    ) => {
+      return agentThreadManager.updateThread(threadId, patch)
+    },
+  )
+
+  ipcMain.handle('agents:delete', async (_event, threadId: string) => {
+    return agentThreadManager.deleteThread(threadId)
+  })
+
+  ipcMain.handle('agents:connect', async (_event, threadId: string) => {
+    return agentThreadManager.connectThread(threadId)
+  })
+
+  ipcMain.handle('agents:disconnect', async (_event, threadId: string) => {
+    return agentThreadManager.disconnectThread(threadId)
+  })
+
+  ipcMain.handle('agents:send-prompt', async (_event, threadId: string, prompt: string) => {
+    return agentThreadManager.sendPrompt(threadId, prompt)
+  })
+
+  ipcMain.handle('agents:cancel', async (_event, threadId: string) => {
+    return agentThreadManager.cancelPrompt(threadId)
+  })
+
+  ipcMain.handle(
+    'agents:resolve-permission',
+    async (_event, threadId: string, optionId: string | null) => {
+      return agentThreadManager.resolvePermission(threadId, optionId)
+    },
+  )
+
   ipcMain.handle(
     'services:open-editor',
     async (_event, editor: keyof typeof EDITOR_APP_NAMES = 'zed') => {
@@ -1021,5 +1097,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  agentThreadManager.disposeAllThreads()
   disposeAllTerminalSessions()
 })
