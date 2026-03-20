@@ -10,6 +10,7 @@ import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
 import { AgentThreadManager } from './agent-threads'
 
 const isDev = !app.isPackaged
+const remoteDebuggingPort = process.env.DEV6_REMOTE_DEBUGGING_PORT ?? '9222'
 let updateState = 'idle'
 const execFileAsync = promisify(execFile)
 let commandEnvPromise: Promise<NodeJS.ProcessEnv> | null = null

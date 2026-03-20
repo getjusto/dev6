@@ -1,0 +1,4 @@
+interface:
+  display_name: "Electron live"
+  short_description: "Inspect the live renderer of a running Electron app through its CDP endpoint."
+  default_prompt: "Use $electron-live to inspect the actual window of the running Electron app, capture a screenshot, and summarize what is visible."
