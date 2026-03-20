@@ -64,6 +64,11 @@ const TERMINAL_APP_BUNDLES = {
 } as const
 const TERMINAL_TITLE_PATTERN = /\u001B\](?:0|2);([\s\S]*?)(?:\u0007|\u001B\\)/g
 
+if (isDev) {
+  // Expose the live Electron window over CDP so agent-browser can attach to the real app.
+  app.commandLine.appendSwitch('remote-debugging-port', remoteDebuggingPort)
+}
+
 // --- Settings persistence ---
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
 
@@ -984,8 +989,12 @@ app.whenReady().then(() => {
     return agentThreadManager.listThreads()
   })
 
-  ipcMain.handle('agents:create', async () => {
-    return agentThreadManager.createThread()
+  ipcMain.handle('agents:create', async (_event, agentKind: 'codex' | 'claude') => {
+    return agentThreadManager.createThread(agentKind)
+  })
+
+  ipcMain.handle('agents:options', async (_event, agentKind: 'codex' | 'claude') => {
+    return agentThreadManager.listAvailableOptions(agentKind)
   })
 
   ipcMain.handle(
@@ -995,8 +1004,11 @@ app.whenReady().then(() => {
       threadId: string,
       patch: Partial<{
         title: string
-        launchCommand: string
-        cwd: string
+        settings: Partial<{
+          model: string | null
+          reasoningEffort: string | null
+          mode: string | null
+        }>
       }>,
     ) => {
       return agentThreadManager.updateThread(threadId, patch)
@@ -1015,9 +1027,22 @@ app.whenReady().then(() => {
     return agentThreadManager.disconnectThread(threadId)
   })
 
-  ipcMain.handle('agents:send-prompt', async (_event, threadId: string, prompt: string) => {
+  ipcMain.handle(
+    'agents:send-prompt',
+    async (
+      _event,
+      threadId: string,
+      prompt: {
+        text: string
+        images: Array<{
+          mimeType: string
+          dataUrl: string
+        }>
+      },
+    ) => {
     return agentThreadManager.sendPrompt(threadId, prompt)
-  })
+    },
+  )
 
   ipcMain.handle('agents:cancel', async (_event, threadId: string) => {
     return agentThreadManager.cancelPrompt(threadId)

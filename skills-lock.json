@@ -1,6 +1,11 @@
 {
   "version": 1,
   "skills": {
+    "electron": {
+      "source": "vercel-labs/agent-browser",
+      "sourceType": "github",
+      "computedHash": "587f7d9187c237d909b9f446cf3ac357184342d54ceb7c430dec56fdbac6816c"
+    },
     "shadcn": {
       "source": "shadcn/ui",
       "sourceType": "github",

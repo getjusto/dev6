@@ -20,6 +20,46 @@ type TerminalSessionSummaryPayload = {
   signal: number | null
 }
 
+type AgentThreadPayload = {
+  id: string
+  title: string
+  sessionTitle: string | null
+  agentKind: 'codex' | 'claude'
+  launchCommand: string
+  cwd: string
+  settings: {
+    model: string | null
+    reasoningEffort: string | null
+    mode: string | null
+  }
+  sessionId: string | null
+  createdAt: number
+  updatedAt: number
+  status: 'draft' | 'connecting' | 'ready' | 'running' | 'error' | 'disconnected'
+  errorMessage: string | null
+  agentName: string | null
+  agentVersion: string | null
+  availableCommands: Array<{
+    name: string
+    description: string | null
+    inputHint: string | null
+  }>
+  pendingPermission: {
+    toolCallId: string
+    title: string
+    kind: string | null
+    status: string | null
+    locations: string[]
+    rawInput: string | null
+    options: Array<{
+      optionId: string
+      name: string
+      kind: 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always'
+    }>
+  } | null
+  items: Array<Record<string, unknown>>
+}
+
 contextBridge.exposeInMainWorld('desktop', {
   getAppInfo: () => ipcRenderer.invoke('app:get-info'),
   getUpdateStatus: () => ipcRenderer.invoke('updates:get-status'),
@@ -86,6 +126,49 @@ contextBridge.exposeInMainWorld('desktop', {
 
     return () => {
       ipcRenderer.removeListener('terminals:sessions-changed', listener)
+    }
+  },
+  listAgentThreads: () => ipcRenderer.invoke('agents:list'),
+  listAgentOptions: (agentKind: 'codex' | 'claude') => ipcRenderer.invoke('agents:options', agentKind),
+  createAgentThread: (agentKind: 'codex' | 'claude') =>
+    ipcRenderer.invoke('agents:create', agentKind),
+  updateAgentThread: (
+    threadId: string,
+    patch: Partial<{
+      title: string
+      settings: Partial<{
+        model: string | null
+        reasoningEffort: string | null
+        mode: string | null
+      }>
+    }>,
+  ) => ipcRenderer.invoke('agents:update', threadId, patch),
+  deleteAgentThread: (threadId: string) => ipcRenderer.invoke('agents:delete', threadId),
+  connectAgentThread: (threadId: string) => ipcRenderer.invoke('agents:connect', threadId),
+  disconnectAgentThread: (threadId: string) => ipcRenderer.invoke('agents:disconnect', threadId),
+  sendAgentPrompt: (
+    threadId: string,
+    prompt: {
+      text: string
+      images: Array<{
+        mimeType: string
+        dataUrl: string
+      }>
+    },
+  ) =>
+    ipcRenderer.invoke('agents:send-prompt', threadId, prompt),
+  cancelAgentPrompt: (threadId: string) => ipcRenderer.invoke('agents:cancel', threadId),
+  resolveAgentPermission: (threadId: string, optionId: string | null) =>
+    ipcRenderer.invoke('agents:resolve-permission', threadId, optionId),
+  onAgentThreadsChanged: (callback: (threads: AgentThreadPayload[]) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, threads: AgentThreadPayload[]) => {
+      callback(threads)
+    }
+
+    ipcRenderer.on('agents:threads-changed', listener)
+
+    return () => {
+      ipcRenderer.removeListener('agents:threads-changed', listener)
     }
   },
   openServicesInEditor: (editor?: 'zed' | 'vscode' | 'cursor') =>
