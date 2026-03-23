@@ -14,6 +14,7 @@ const execFileAsync = promisify(execFile)
 let commandEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
 let mainWindow: BrowserWindow | null = null
 const MAX_TERMINAL_BUFFER_CHARS = 2_000_000
+const LOG_TAIL_CHUNK_BYTES = 64 * 1024
 const TERMINAL_CWD_REFRESH_MS = 2000
 const EDITOR_APP_NAMES = {
   zed: 'Zed',
@@ -83,6 +84,77 @@ function getServicesPath(): string {
   const p = settings.servicesPath as string | undefined
   if (!p) throw new Error('servicesPath not configured')
   return p
+}
+
+function getServiceLogPath(serviceName: string): string {
+  if (!serviceName || serviceName.includes('/') || serviceName.includes('\\')) {
+    throw new Error('Invalid service name.')
+  }
+
+  return path.join(getServicesPath(), '.local', 'logs', `${serviceName}.log`)
+}
+
+async function readLastLinesFromFile(filePath: string, lineCount: number): Promise<string | null> {
+  if (lineCount <= 0) {
+    return ''
+  }
+
+  let fileHandle: fs.promises.FileHandle | null = null
+
+  try {
+    fileHandle = await fs.promises.open(filePath, 'r')
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null
+    }
+
+    throw error
+  }
+
+  try {
+    const { size } = await fileHandle.stat()
+    if (size <= 0) {
+      return ''
+    }
+
+    let position = size
+    let newlineCount = 0
+    const chunks: Buffer[] = []
+
+    while (position > 0 && newlineCount <= lineCount) {
+      const bytesToRead = Math.min(LOG_TAIL_CHUNK_BYTES, position)
+      position -= bytesToRead
+
+      const buffer = Buffer.allocUnsafe(bytesToRead)
+      const { bytesRead } = await fileHandle.read(buffer, 0, bytesToRead, position)
+      const chunk = buffer.subarray(0, bytesRead)
+      chunks.unshift(chunk)
+
+      for (let index = 0; index < bytesRead; index += 1) {
+        if (chunk[index] === 0x0a) {
+          newlineCount += 1
+        }
+      }
+    }
+
+    const text = Buffer.concat(chunks).toString('utf-8')
+    const endsWithNewline = text.endsWith('\n')
+    const lines = text.split(/\r?\n/)
+
+    if (endsWithNewline) {
+      lines.pop()
+    }
+
+    const tail = lines.slice(-lineCount).join('\n')
+
+    if (!tail) {
+      return endsWithNewline ? '\n' : ''
+    }
+
+    return endsWithNewline ? `${tail}\n` : tail
+  } finally {
+    await fileHandle.close()
+  }
 }
 
 function withMacPathFallback(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -720,6 +792,11 @@ async function callDev5(...args: string[]): Promise<unknown> {
 }
 
 async function readDev5Logs(serviceName: string, lineCount: number): Promise<string> {
+  const fileLogs = await readLastLinesFromFile(getServiceLogPath(serviceName), lineCount)
+  if (fileLogs !== null) {
+    return fileLogs
+  }
+
   const servicesPath = getServicesPath()
   const env = await getCommandEnv()
   const { stdout } = await execFileAsync(
