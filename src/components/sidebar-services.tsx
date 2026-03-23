@@ -11,9 +11,7 @@ import {
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import {
-	getPendingServiceStatus,
 	SERVICE_TOGGLE_LOADING_MS,
-	waitForDuration,
 } from "@/lib/service-toggle";
 import { getStableServiceStatus } from "@/lib/services";
 import { ServiceStatus } from "./service-status";
@@ -21,11 +19,13 @@ import { ServiceStatus } from "./service-status";
 function ServiceRow({
 	service,
 	isPending,
+	isBusy,
 	onToggle,
 	onSelect,
 }: {
 	service: Dev5ServiceStatus;
 	isPending: boolean;
+	isBusy: boolean;
 	onToggle: (service: Dev5ServiceStatus) => void;
 	onSelect: (service: Dev5ServiceStatus) => void;
 }) {
@@ -43,7 +43,7 @@ function ServiceRow({
 				</span>
 			</SidebarMenuButton>
 			<SidebarMenuAction
-				disabled={isPending}
+				disabled={isBusy}
 				onClick={() => {
 					onToggle(service);
 				}}
@@ -67,17 +67,50 @@ export function SidebarServices() {
 	const [services, setServices] = useState<Dev5ServiceStatus[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
-	const [pendingStatuses, setPendingStatuses] = useState<
-		Record<string, ReturnType<typeof getPendingServiceStatus>>
-	>({});
+	const [pendingServices, setPendingServices] = useState<Record<string, boolean>>(
+		{},
+	);
+	const [busyServices, setBusyServices] = useState<Record<string, boolean>>({});
 	const isRefreshingRef = useRef(false);
 	const isMountedRef = useRef(true);
+	const clearPendingTimeoutsRef = useRef<Record<string, number>>({});
 
 	useEffect(() => {
+		const clearPendingTimeouts = clearPendingTimeoutsRef.current;
+
 		return () => {
 			isMountedRef.current = false;
+			Object.values(clearPendingTimeouts).forEach((timeoutId) => {
+				window.clearTimeout(timeoutId);
+			});
 		};
 	}, []);
+
+	function startForcedLoading(serviceName: string) {
+		const existingTimeout = clearPendingTimeoutsRef.current[serviceName];
+		if (existingTimeout) {
+			window.clearTimeout(existingTimeout);
+		}
+
+		setPendingServices((current) => ({
+			...current,
+			[serviceName]: true,
+		}));
+
+		clearPendingTimeoutsRef.current[serviceName] = window.setTimeout(() => {
+			delete clearPendingTimeoutsRef.current[serviceName];
+
+			if (!isMountedRef.current) {
+				return;
+			}
+
+			setPendingServices((current) => {
+				const next = { ...current };
+				delete next[serviceName];
+				return next;
+			});
+		}, SERVICE_TOGGLE_LOADING_MS);
+	}
 
 	async function refreshServices(showLoading: boolean) {
 		if (isRefreshingRef.current) {
@@ -124,64 +157,52 @@ export function SidebarServices() {
 	}, []);
 
 	async function handleToggle(service: Dev5ServiceStatus) {
-		if (pendingStatuses[service.service_name]) {
+		if (busyServices[service.service_name]) {
 			return;
 		}
 
 		setError(null);
 		const stableStatus = getStableServiceStatus(service);
+		const serviceName = service.service_name;
 
-		const pendingStatus =
-			stableStatus === "on"
-				? getPendingServiceStatus("stop")
-				: getPendingServiceStatus("start");
-		const minimumDelay = waitForDuration(SERVICE_TOGGLE_LOADING_MS);
-
-		setPendingStatuses((current) => ({
+		setBusyServices((current) => ({
 			...current,
-			[service.service_name]: pendingStatus,
+			[serviceName]: true,
 		}));
+		startForcedLoading(serviceName);
 
 		let toggleError: unknown = null;
 
 		try {
 			if (service.status === "error") {
-				await window.desktop.stopService(service.service_name);
+				await window.desktop.stopService(serviceName);
 				await new Promise((resolve) => setTimeout(resolve, 1000));
-				await window.desktop.startService(service.service_name);
+				await window.desktop.startService(serviceName);
 			} else if (stableStatus === "on") {
-				await window.desktop.stopService(service.service_name);
+				await window.desktop.stopService(serviceName);
 			} else {
-				await window.desktop.startService(service.service_name);
+				await window.desktop.startService(serviceName);
 			}
 		} catch (error) {
 			toggleError = error;
-		}
+		} finally {
+			if (isMountedRef.current) {
+				setBusyServices((current) => {
+					const next = { ...current };
+					delete next[serviceName];
+					return next;
+				});
 
-		await minimumDelay;
+				void refreshServices(false);
 
-		if (!isMountedRef.current) {
-			return;
-		}
-
-		await refreshServices(false);
-
-		if (!isMountedRef.current) {
-			return;
-		}
-
-		setPendingStatuses((current) => {
-			const nextStatuses = { ...current };
-			delete nextStatuses[service.service_name];
-			return nextStatuses;
-		});
-
-		if (toggleError) {
-			setError(
-				toggleError instanceof Error
-					? toggleError.message
-					: "Could not change service state.",
-			);
+				if (toggleError) {
+					setError(
+						toggleError instanceof Error
+							? toggleError.message
+							: "Could not change service state.",
+					);
+				}
+			}
 		}
 	}
 
@@ -205,7 +226,8 @@ export function SidebarServices() {
 							<ServiceRow
 								key={`${service.dir_name}:${service.service_name}`}
 								service={service}
-								isPending={Boolean(pendingStatuses[service.service_name])}
+								isPending={Boolean(pendingServices[service.service_name])}
+								isBusy={Boolean(busyServices[service.service_name])}
 								onToggle={handleToggle}
 								onSelect={handleSelect}
 							/>

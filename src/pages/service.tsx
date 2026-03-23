@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { ChevronDown, ChevronUp, Loader2, Play, Square } from 'lucide-react'
 
@@ -6,11 +6,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ansiToSegments } from '@/lib/ansi'
 import { getStableServiceStatus } from '@/lib/services'
-import {
-  SERVICE_TOGGLE_LOADING_MS,
-  type ServiceToggleAction,
-  waitForDuration,
-} from '@/lib/service-toggle'
+import { SERVICE_TOGGLE_LOADING_MS, type ServiceToggleAction } from '@/lib/service-toggle'
+
+const SERVICE_STATUS_REFRESH_MS = 5000
 
 type LogLineRender = {
   element: React.JSX.Element
@@ -166,16 +164,22 @@ export default function ServicePage() {
   const [isToggling, setIsToggling] = useState(false)
   const [pendingToggleAction, setPendingToggleAction] = useState<ServiceToggleAction | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const isRefreshingRef = useRef(false)
+  const isRefreshingLogsRef = useRef(false)
+  const isRefreshingStatusRef = useRef(false)
   const isMountedRef = useRef(true)
   const refreshVersionRef = useRef(0)
   const logViewportRef = useRef<HTMLDivElement | null>(null)
   const shouldFollowRef = useRef(true)
+  const shouldScrollToBottomOnLoadRef = useRef(true)
   const matchRefs = useRef<(HTMLSpanElement | null)[]>([])
+  const clearPendingTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false
+      if (clearPendingTimeoutRef.current !== null) {
+        window.clearTimeout(clearPendingTimeoutRef.current)
+      }
     }
   }, [])
 
@@ -187,26 +191,34 @@ export default function ServicePage() {
   }
 
   async function refreshServiceStatus(currentServiceName: string, refreshVersion: number) {
-    if (!currentServiceName) return
+    if (!currentServiceName || isRefreshingStatusRef.current) return
 
-    const nextServices = await window.desktop.getServicesStatus()
-    if (refreshVersion !== refreshVersionRef.current) {
-      return
+    isRefreshingStatusRef.current = true
+
+    try {
+      const nextServices = await window.desktop.getServicesStatus()
+      if (refreshVersion !== refreshVersionRef.current) {
+        return
+      }
+
+      const nextService =
+        nextServices.find((entry) => entry.service_name === currentServiceName) ?? null
+      setService(nextService)
+    } catch {
+      // Keep the last known status if the background refresh fails.
+    } finally {
+      isRefreshingStatusRef.current = false
     }
-
-    const nextService =
-      nextServices.find((entry) => entry.service_name === currentServiceName) ?? null
-    setService(nextService)
   }
 
   async function refreshLogs(showLoading: boolean) {
-    if (!serviceName || isRefreshingRef.current) {
+    if (!serviceName || isRefreshingLogsRef.current) {
       return
     }
 
     const currentServiceName = serviceName
     const refreshVersion = refreshVersionRef.current
-    isRefreshingRef.current = true
+    isRefreshingLogsRef.current = true
 
     if (showLoading) {
       setIsLoadingLogs(true)
@@ -218,10 +230,7 @@ export default function ServicePage() {
         updateBottomState(viewport)
       }
 
-      const [nextLogs] = await Promise.all([
-        window.desktop.getServiceLogs(currentServiceName, 5000),
-        refreshServiceStatus(currentServiceName, refreshVersion),
-      ])
+      const nextLogs = await window.desktop.getServiceLogs(currentServiceName, 5000)
 
       if (refreshVersion !== refreshVersionRef.current) {
         return
@@ -237,7 +246,7 @@ export default function ServicePage() {
       setError(loadError instanceof Error ? loadError.message : 'Could not load logs.')
     } finally {
       if (refreshVersion === refreshVersionRef.current) {
-        isRefreshingRef.current = false
+        isRefreshingLogsRef.current = false
         setIsLoadingLogs(false)
       }
     }
@@ -245,34 +254,56 @@ export default function ServicePage() {
 
   useEffect(() => {
     refreshVersionRef.current += 1
-    isRefreshingRef.current = false
+    isRefreshingLogsRef.current = false
+    isRefreshingStatusRef.current = false
     shouldFollowRef.current = true
+    shouldScrollToBottomOnLoadRef.current = true
     setIsAtBottom(true)
     setIsLoadingLogs(true)
     setIsToggling(false)
+    if (clearPendingTimeoutRef.current !== null) {
+      window.clearTimeout(clearPendingTimeoutRef.current)
+      clearPendingTimeoutRef.current = null
+    }
     setPendingToggleAction(null)
     setError(null)
     setService(null)
     setLogs('')
+    void refreshServiceStatus(serviceName ?? '', refreshVersionRef.current)
     void refreshLogs(true)
 
-    const intervalId = window.setInterval(() => {
+    const logsIntervalId = window.setInterval(() => {
       void refreshLogs(false)
     }, 1000)
 
+    const statusIntervalId = window.setInterval(() => {
+      if (!serviceName) {
+        return
+      }
+
+      void refreshServiceStatus(serviceName, refreshVersionRef.current)
+    }, SERVICE_STATUS_REFRESH_MS)
+
     return () => {
-      window.clearInterval(intervalId)
+      window.clearInterval(logsIntervalId)
+      window.clearInterval(statusIntervalId)
     }
   }, [serviceName])
 
   const stableServiceStatus = service ? getStableServiceStatus(service) : null
 
-  useEffect(() => {
-    if (shouldFollowRef.current && logViewportRef.current) {
-      logViewportRef.current.scrollTop = logViewportRef.current.scrollHeight
-      setIsAtBottom(true)
+  useLayoutEffect(() => {
+    const viewport = logViewportRef.current
+    if (!viewport || isLoadingLogs) {
+      return
     }
-  }, [logs, query])
+
+    if (shouldFollowRef.current || shouldScrollToBottomOnLoadRef.current) {
+      viewport.scrollTop = viewport.scrollHeight
+      setIsAtBottom(true)
+      shouldScrollToBottomOnLoadRef.current = false
+    }
+  }, [isLoadingLogs, logs, serviceName])
 
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const matchIndexRef = { current: 0 }
@@ -308,19 +339,30 @@ export default function ServicePage() {
 
     const activeNode = matchRefs.current[activeMatchIndex]
     activeNode?.scrollIntoView({ block: 'center' })
-  }, [activeMatchIndex, normalizedQuery, logs])
+  }, [activeMatchIndex, normalizedQuery])
 
   async function handleToggle() {
-    if (!serviceName || !service || pendingToggleAction) return
+    if (!serviceName || !service || isToggling || pendingToggleAction) return
 
     const nextAction: ServiceToggleAction = stableServiceStatus === 'on' ? 'stop' : 'start'
     const refreshVersion = refreshVersionRef.current
-    const minimumDelay = waitForDuration(SERVICE_TOGGLE_LOADING_MS)
     let toggleError: unknown = null
 
     setError(null)
     setIsToggling(true)
     setPendingToggleAction(nextAction)
+    if (clearPendingTimeoutRef.current !== null) {
+      window.clearTimeout(clearPendingTimeoutRef.current)
+    }
+    clearPendingTimeoutRef.current = window.setTimeout(() => {
+      clearPendingTimeoutRef.current = null
+
+      if (!isMountedRef.current || refreshVersion !== refreshVersionRef.current) {
+        return
+      }
+
+      setPendingToggleAction(null)
+    }, SERVICE_TOGGLE_LOADING_MS)
 
     try {
       if (stableServiceStatus === 'on') {
@@ -330,26 +372,19 @@ export default function ServicePage() {
       }
     } catch (error) {
       toggleError = error
+    } finally {
+      if (isMountedRef.current && refreshVersion === refreshVersionRef.current) {
+        setIsToggling(false)
+        await refreshLogs(false)
+        await refreshServiceStatus(serviceName, refreshVersion)
+
+        if (isMountedRef.current && refreshVersion === refreshVersionRef.current && toggleError) {
+          setError(
+            toggleError instanceof Error ? toggleError.message : 'Could not change service state.',
+          )
+        }
+      }
     }
-
-    await minimumDelay
-
-    if (!isMountedRef.current || refreshVersion !== refreshVersionRef.current) {
-      return
-    }
-
-    await refreshLogs(false)
-
-    if (!isMountedRef.current || refreshVersion !== refreshVersionRef.current) {
-      return
-    }
-
-    if (toggleError) {
-      setError(toggleError instanceof Error ? toggleError.message : 'Could not change service state.')
-    }
-
-    setPendingToggleAction(null)
-    setIsToggling(false)
   }
 
   function handleNextMatch() {
@@ -378,9 +413,9 @@ export default function ServicePage() {
                 variant={stableServiceStatus === 'on' ? 'destructive' : 'outline'}
                 size="sm"
                 onClick={() => void handleToggle()}
-                disabled={!service || isToggling}
+                disabled={!service || isToggling || pendingToggleAction !== null}
               >
-                {isToggling ? (
+                {pendingToggleAction ? (
                   <Loader2 className="animate-spin" />
                 ) : stableServiceStatus === 'on' ? (
                   <Square />
