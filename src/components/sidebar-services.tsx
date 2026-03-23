@@ -129,9 +129,10 @@ export function SidebarServices() {
 		}
 
 		setError(null);
+		const stableStatus = getStableServiceStatus(service);
 
 		const pendingStatus =
-			service.status === "on"
+			stableStatus === "on"
 				? getPendingServiceStatus("stop")
 				: getPendingServiceStatus("start");
 		const minimumDelay = waitForDuration(SERVICE_TOGGLE_LOADING_MS);
@@ -144,13 +145,13 @@ export function SidebarServices() {
 		let toggleError: unknown = null;
 
 		try {
-			if (service.status === "on") {
-				await window.desktop.stopService(service.service_name);
-			} else if (service.status === "off") {
-				await window.desktop.startService(service.service_name);
-			} else {
+			if (service.status === "error") {
 				await window.desktop.stopService(service.service_name);
 				await new Promise((resolve) => setTimeout(resolve, 1000));
+				await window.desktop.startService(service.service_name);
+			} else if (stableStatus === "on") {
+				await window.desktop.stopService(service.service_name);
+			} else {
 				await window.desktop.startService(service.service_name);
 			}
 		} catch (error) {

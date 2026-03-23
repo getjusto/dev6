@@ -7,7 +7,6 @@ import { Input } from '@/components/ui/input'
 import { ansiToSegments } from '@/lib/ansi'
 import { getStableServiceStatus } from '@/lib/services'
 import {
-  getPendingServiceStatus,
   SERVICE_TOGGLE_LOADING_MS,
   type ServiceToggleAction,
   waitForDuration,
@@ -324,7 +323,7 @@ export default function ServicePage() {
     setPendingToggleAction(nextAction)
 
     try {
-      if (service.status === 'on') {
+      if (stableServiceStatus === 'on') {
         await window.desktop.stopService(serviceName)
       } else {
         await window.desktop.startService(serviceName)

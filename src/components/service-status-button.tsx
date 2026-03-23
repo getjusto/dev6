@@ -1,13 +1,14 @@
 import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import type { StableServiceStatus } from "@/lib/services";
 import { cn } from "@/lib/utils";
 
 type ServiceStatusButtonProps = {
 	serviceName: string;
 	isOnline: boolean;
 	isPending: boolean;
-	serviceState: "on" | "off" | "error" | "loadingOn" | "loadingOff";
+	serviceState: StableServiceStatus;
 	onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
 };
 
@@ -18,8 +19,6 @@ export function ServiceStatusButton({
 	serviceState,
 	onClick,
 }: ServiceStatusButtonProps) {
-	const isTransitioning =
-		serviceState === "loadingOn" || serviceState === "loadingOff";
 	return (
 		<Button
 			type="button"
@@ -30,7 +29,7 @@ export function ServiceStatusButton({
 			onClick={onClick}
 			className="rounded-full"
 		>
-			{isTransitioning ? (
+			{isPending ? (
 				<Loader2
 					aria-hidden="true"
 					className="size-3 animate-spin text-amber-500"

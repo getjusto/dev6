@@ -1,15 +1,15 @@
 import { Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import type { StableServiceStatus } from "@/lib/services";
 
 type ServiceStatusProps = {
-	status: "on" | "off" | "error" | "loadingOn" | "loadingOff";
+	status: StableServiceStatus;
+	isPending?: boolean;
 };
 
-export function ServiceStatus({ status }: ServiceStatusProps) {
-	const isTransitioning = status === "loadingOn" || status === "loadingOff";
-
-	if (isTransitioning) {
+export function ServiceStatus({ status, isPending = false }: ServiceStatusProps) {
+	if (isPending) {
 		return (
 			<Loader2
 				aria-hidden="true"
