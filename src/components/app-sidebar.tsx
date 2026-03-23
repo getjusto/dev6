@@ -2,7 +2,6 @@ import * as React from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Loader2, Settings, Square } from 'lucide-react'
 
-import { SidebarAgents } from '@/components/sidebar-agents'
 import { SidebarServices } from '@/components/sidebar-services'
 import { SidebarTerminals } from '@/components/sidebar-terminals'
 import isoDarkUrl from '@/assets/iso-dark.svg'
@@ -118,11 +117,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     navigate(`/terminals/${session.id}`)
   }
 
-  async function handleCreateAgentThread(agentKind: 'codex' | 'claude') {
-    const thread = await window.desktop.createAgentThread(agentKind)
-    navigate(`/agents/${thread.id}`)
-  }
-
   return (
     <Sidebar
       variant="inset"
@@ -156,7 +150,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent className="min-h-0 overflow-auto">
-        <SidebarAgents onCreateThread={handleCreateAgentThread} />
         <SidebarTerminals onCreateTerminal={handleCreateTerminal} />
         <SidebarServices />
       </SidebarContent>

@@ -15,7 +15,6 @@
     "release:mac": "./scripts/publish-mac.sh"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "^0.16.1",
     "@fontsource-variable/geist": "^5.2.8",
     "@homebridge/node-pty-prebuilt-multiarch": "^0.13.1",
     "@radix-ui/react-avatar": "^1.1.11",

@@ -7,10 +7,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch'
-import { AgentThreadManager } from './agent-threads'
 
 const isDev = !app.isPackaged
-const remoteDebuggingPort = process.env.DEV6_REMOTE_DEBUGGING_PORT ?? '9222'
 let updateState = 'idle'
 const execFileAsync = promisify(execFile)
 let commandEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
@@ -63,11 +61,6 @@ const TERMINAL_APP_BUNDLES = {
   claude: 'Claude.app',
 } as const
 const TERMINAL_TITLE_PATTERN = /\u001B\](?:0|2);([\s\S]*?)(?:\u0007|\u001B\\)/g
-
-if (isDev) {
-  // Expose the live Electron window over CDP so agent-browser can attach to the real app.
-  app.commandLine.appendSwitch('remote-debugging-port', remoteDebuggingPort)
-}
 
 // --- Settings persistence ---
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
@@ -393,13 +386,6 @@ function getDefaultTerminalCwd() {
     return app.getPath('home')
   }
 }
-
-const agentThreadManager = new AgentThreadManager({
-  clientName: 'dev6',
-  clientVersion: app.getVersion(),
-  getCommandEnv,
-  getDefaultCwd: getDefaultTerminalCwd,
-})
 
 function resolveTerminalCwd(candidate?: string) {
   const nextCwd = candidate && fs.existsSync(candidate) ? candidate : getDefaultTerminalCwd()
@@ -893,7 +879,6 @@ function setupUpdater() {
 }
 
 app.whenReady().then(() => {
-  void agentThreadManager.restoreThreads()
   createMainWindow()
   setupUpdater()
 
@@ -985,76 +970,6 @@ app.whenReady().then(() => {
     resizeTerminalSession(sessionId, cols, rows)
   })
 
-  ipcMain.handle('agents:list', async () => {
-    return agentThreadManager.listThreads()
-  })
-
-  ipcMain.handle('agents:create', async (_event, agentKind: 'codex' | 'claude') => {
-    return agentThreadManager.createThread(agentKind)
-  })
-
-  ipcMain.handle('agents:options', async (_event, agentKind: 'codex' | 'claude') => {
-    return agentThreadManager.listAvailableOptions(agentKind)
-  })
-
-  ipcMain.handle(
-    'agents:update',
-    async (
-      _event,
-      threadId: string,
-      patch: Partial<{
-        title: string
-        settings: Partial<{
-          model: string | null
-          reasoningEffort: string | null
-          mode: string | null
-        }>
-      }>,
-    ) => {
-      return agentThreadManager.updateThread(threadId, patch)
-    },
-  )
-
-  ipcMain.handle('agents:delete', async (_event, threadId: string) => {
-    return agentThreadManager.deleteThread(threadId)
-  })
-
-  ipcMain.handle('agents:connect', async (_event, threadId: string) => {
-    return agentThreadManager.connectThread(threadId)
-  })
-
-  ipcMain.handle('agents:disconnect', async (_event, threadId: string) => {
-    return agentThreadManager.disconnectThread(threadId)
-  })
-
-  ipcMain.handle(
-    'agents:send-prompt',
-    async (
-      _event,
-      threadId: string,
-      prompt: {
-        text: string
-        images: Array<{
-          mimeType: string
-          dataUrl: string
-        }>
-      },
-    ) => {
-    return agentThreadManager.sendPrompt(threadId, prompt)
-    },
-  )
-
-  ipcMain.handle('agents:cancel', async (_event, threadId: string) => {
-    return agentThreadManager.cancelPrompt(threadId)
-  })
-
-  ipcMain.handle(
-    'agents:resolve-permission',
-    async (_event, threadId: string, optionId: string | null) => {
-      return agentThreadManager.resolvePermission(threadId, optionId)
-    },
-  )
-
   ipcMain.handle(
     'services:open-editor',
     async (_event, editor: keyof typeof EDITOR_APP_NAMES = 'zed') => {
@@ -1123,6 +1038,5 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
-  agentThreadManager.disposeAllThreads()
   disposeAllTerminalSessions()
 })
