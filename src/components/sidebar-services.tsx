@@ -15,26 +15,28 @@ import {
 	SERVICE_TOGGLE_LOADING_MS,
 	waitForDuration,
 } from "@/lib/service-toggle";
+import { getStableServiceStatus } from "@/lib/services";
 import { ServiceStatus } from "./service-status";
 
 function ServiceRow({
 	service,
+	isPending,
 	onToggle,
 	onSelect,
 }: {
 	service: Dev5ServiceStatus;
+	isPending: boolean;
 	onToggle: (service: Dev5ServiceStatus) => void;
 	onSelect: (service: Dev5ServiceStatus) => void;
 }) {
-	const isPending =
-		service.status === "loadingOn" || service.status === "loadingOff";
+	const stableStatus = getStableServiceStatus(service);
 
 	return (
 		<SidebarMenuItem>
 			<SidebarMenuButton onClick={() => onSelect(service)}>
-				<ServiceStatus status={service.status} />
+				<ServiceStatus status={stableStatus} isPending={isPending} />
 				<span className="min-w-0 flex-1 truncate font-medium">
-					{service.service_name}
+					{service.dir_name}
 				</span>
 				<span className="ml-auto shrink-0 font-mono text-muted-foreground text-xs">
 					{service.port == null ? "—" : service.port}
@@ -48,9 +50,9 @@ function ServiceRow({
 			>
 				{isPending ? (
 					<Loader2 className="animate-spin" />
-				) : service.status === "off" ? (
+				) : stableStatus === "off" ? (
 					<Power />
-				) : service.status === "on" ? (
+				) : stableStatus === "on" ? (
 					<PowerOff />
 				) : (
 					<RotateCcw />
@@ -90,9 +92,7 @@ export function SidebarServices() {
 			}
 
 			const nextServices = await window.desktop.getServicesStatus();
-			nextServices.sort((left, right) =>
-				left.service_name.localeCompare(right.service_name),
-			);
+			nextServices.sort((left, right) => left.dir_name.localeCompare(right.dir_name));
 			setError(null);
 			setServices(nextServices);
 		} catch (loadError) {
@@ -122,18 +122,6 @@ export function SidebarServices() {
 			window.clearInterval(intervalId);
 		};
 	}, []);
-
-	const displayedServices = services.map((service) => {
-		const pendingStatus = pendingStatuses[service.service_name];
-		if (!pendingStatus) {
-			return service;
-		}
-
-		return {
-			...service,
-			status: pendingStatus,
-		};
-	});
 
 	async function handleToggle(service: Dev5ServiceStatus) {
 		if (pendingStatuses[service.service_name]) {
@@ -197,7 +185,7 @@ export function SidebarServices() {
 	}
 
 	function handleSelect(service: Dev5ServiceStatus) {
-		navigate(`/services/${service.service_name}`);
+		navigate(`/services/${encodeURIComponent(service.service_name)}`);
 	}
 
 	return (
@@ -212,10 +200,11 @@ export function SidebarServices() {
 					<div className="px-2 py-1 text-xs text-destructive">{error}</div>
 				) : (
 					<SidebarMenu className="pb-2">
-						{displayedServices.map((service) => (
+						{services.map((service) => (
 							<ServiceRow
 								key={`${service.dir_name}:${service.service_name}`}
 								service={service}
+								isPending={Boolean(pendingStatuses[service.service_name])}
 								onToggle={handleToggle}
 								onSelect={handleSelect}
 							/>

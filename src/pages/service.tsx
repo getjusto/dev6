@@ -5,6 +5,7 @@ import { ChevronDown, ChevronUp, Loader2, Play, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ansiToSegments } from '@/lib/ansi'
+import { getStableServiceStatus } from '@/lib/services'
 import {
   getPendingServiceStatus,
   SERVICE_TOGGLE_LOADING_MS,
@@ -147,7 +148,16 @@ function renderLogLine(
 }
 
 export default function ServicePage() {
-  const { serviceName } = useParams()
+  const { serviceName: encodedServiceName } = useParams()
+  let serviceName: string | null = null
+
+  if (encodedServiceName) {
+    try {
+      serviceName = decodeURIComponent(encodedServiceName)
+    } catch {
+      serviceName = encodedServiceName
+    }
+  }
   const [service, setService] = useState<Dev5ServiceStatus | null>(null)
   const [logs, setLogs] = useState('')
   const [query, setQuery] = useState('')
@@ -256,9 +266,7 @@ export default function ServicePage() {
     }
   }, [serviceName])
 
-  const displayedServiceStatus = pendingToggleAction
-    ? getPendingServiceStatus(pendingToggleAction)
-    : service?.status
+  const stableServiceStatus = service ? getStableServiceStatus(service) : null
 
   useEffect(() => {
     if (shouldFollowRef.current && logViewportRef.current) {
@@ -306,7 +314,7 @@ export default function ServicePage() {
   async function handleToggle() {
     if (!serviceName || !service || pendingToggleAction) return
 
-    const nextAction: ServiceToggleAction = service.status === 'on' ? 'stop' : 'start'
+    const nextAction: ServiceToggleAction = stableServiceStatus === 'on' ? 'stop' : 'start'
     const refreshVersion = refreshVersionRef.current
     const minimumDelay = waitForDuration(SERVICE_TOGGLE_LOADING_MS)
     let toggleError: unknown = null
@@ -362,18 +370,20 @@ export default function ServicePage() {
         <div className="border-b px-6 py-4">
           <div className="flex min-w-0 items-center justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="truncate text-xl font-semibold">{serviceName}</h1>
+              <h1 className="truncate text-xl font-semibold">
+                {serviceName ?? ''}
+              </h1>
             </div>
             <div className="shrink-0 flex items-center gap-2">
               <Button
-                variant={displayedServiceStatus === 'on' ? 'destructive' : 'outline'}
+                variant={stableServiceStatus === 'on' ? 'destructive' : 'outline'}
                 size="sm"
                 onClick={() => void handleToggle()}
                 disabled={!service || isToggling}
               >
                 {isToggling ? (
                   <Loader2 className="animate-spin" />
-                ) : displayedServiceStatus === 'on' ? (
+                ) : stableServiceStatus === 'on' ? (
                   <Square />
                 ) : (
                   <Play />
@@ -382,7 +392,7 @@ export default function ServicePage() {
                   ? pendingToggleAction === 'stop'
                     ? 'Stopping…'
                     : 'Starting…'
-                  : displayedServiceStatus === 'on'
+                  : stableServiceStatus === 'on'
                     ? 'Stop'
                     : 'Start'}
               </Button>
@@ -423,7 +433,7 @@ export default function ServicePage() {
           <div
             ref={logViewportRef}
             className={`h-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden font-mono text-[12px] leading-5 ${
-              displayedServiceStatus === 'off' ? 'opacity-50' : ''
+              stableServiceStatus === 'off' ? 'opacity-50' : ''
             }`}
             onScroll={(event) => {
               updateBottomState(event.currentTarget)
