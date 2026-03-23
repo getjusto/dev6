@@ -163,6 +163,8 @@ export default function ServicePage() {
   const [isLoadingLogs, setIsLoadingLogs] = useState(true)
   const [isToggling, setIsToggling] = useState(false)
   const [pendingToggleAction, setPendingToggleAction] = useState<ServiceToggleAction | null>(null)
+  const [pendingToggleUntil, setPendingToggleUntil] = useState<number | null>(null)
+  const [now, setNow] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
   const isRefreshingLogsRef = useRef(false)
   const isRefreshingStatusRef = useRef(false)
@@ -172,14 +174,20 @@ export default function ServicePage() {
   const shouldFollowRef = useRef(true)
   const shouldScrollToBottomOnLoadRef = useRef(true)
   const matchRefs = useRef<(HTMLSpanElement | null)[]>([])
-  const clearPendingTimeoutRef = useRef<number | null>(null)
 
   useEffect(() => {
     return () => {
       isMountedRef.current = false
-      if (clearPendingTimeoutRef.current !== null) {
-        window.clearTimeout(clearPendingTimeoutRef.current)
-      }
+    }
+  }, [])
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNow(Date.now())
+    }, 250)
+
+    return () => {
+      window.clearInterval(intervalId)
     }
   }, [])
 
@@ -261,11 +269,8 @@ export default function ServicePage() {
     setIsAtBottom(true)
     setIsLoadingLogs(true)
     setIsToggling(false)
-    if (clearPendingTimeoutRef.current !== null) {
-      window.clearTimeout(clearPendingTimeoutRef.current)
-      clearPendingTimeoutRef.current = null
-    }
     setPendingToggleAction(null)
+    setPendingToggleUntil(null)
     setError(null)
     setService(null)
     setLogs('')
@@ -291,6 +296,15 @@ export default function ServicePage() {
   }, [serviceName])
 
   const stableServiceStatus = service ? getStableServiceStatus(service) : null
+  const isPendingToggle =
+    pendingToggleAction !== null && pendingToggleUntil !== null && pendingToggleUntil > now
+
+  useEffect(() => {
+    if (pendingToggleAction && pendingToggleUntil !== null && pendingToggleUntil <= now) {
+      setPendingToggleAction(null)
+      setPendingToggleUntil(null)
+    }
+  }, [now, pendingToggleAction, pendingToggleUntil])
 
   useLayoutEffect(() => {
     const viewport = logViewportRef.current
@@ -342,7 +356,7 @@ export default function ServicePage() {
   }, [activeMatchIndex, normalizedQuery])
 
   async function handleToggle() {
-    if (!serviceName || !service || isToggling || pendingToggleAction) return
+    if (!serviceName || !service || isToggling || isPendingToggle) return
 
     const nextAction: ServiceToggleAction = stableServiceStatus === 'on' ? 'stop' : 'start'
     const refreshVersion = refreshVersionRef.current
@@ -351,18 +365,7 @@ export default function ServicePage() {
     setError(null)
     setIsToggling(true)
     setPendingToggleAction(nextAction)
-    if (clearPendingTimeoutRef.current !== null) {
-      window.clearTimeout(clearPendingTimeoutRef.current)
-    }
-    clearPendingTimeoutRef.current = window.setTimeout(() => {
-      clearPendingTimeoutRef.current = null
-
-      if (!isMountedRef.current || refreshVersion !== refreshVersionRef.current) {
-        return
-      }
-
-      setPendingToggleAction(null)
-    }, SERVICE_TOGGLE_LOADING_MS)
+    setPendingToggleUntil(Date.now() + SERVICE_TOGGLE_LOADING_MS)
 
     try {
       if (stableServiceStatus === 'on') {
@@ -413,16 +416,16 @@ export default function ServicePage() {
                 variant={stableServiceStatus === 'on' ? 'destructive' : 'outline'}
                 size="sm"
                 onClick={() => void handleToggle()}
-                disabled={!service || isToggling || pendingToggleAction !== null}
+                disabled={!service || isToggling || isPendingToggle}
               >
-                {pendingToggleAction ? (
+                {isPendingToggle ? (
                   <Loader2 className="animate-spin" />
                 ) : stableServiceStatus === 'on' ? (
                   <Square />
                 ) : (
                   <Play />
                 )}
-                {isToggling
+                {isPendingToggle
                   ? pendingToggleAction === 'stop'
                     ? 'Stopping…'
                     : 'Starting…'

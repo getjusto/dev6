@@ -10,9 +10,7 @@ import {
 	SidebarMenuButton,
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import {
-	SERVICE_TOGGLE_LOADING_MS,
-} from "@/lib/service-toggle";
+import { SERVICE_TOGGLE_LOADING_MS } from "@/lib/service-toggle";
 import { getStableServiceStatus } from "@/lib/services";
 import { ServiceStatus } from "./service-status";
 
@@ -67,50 +65,29 @@ export function SidebarServices() {
 	const [services, setServices] = useState<Dev5ServiceStatus[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
-	const [pendingServices, setPendingServices] = useState<Record<string, boolean>>(
-		{},
-	);
+	const [pendingUntilByService, setPendingUntilByService] = useState<
+		Record<string, number>
+	>({});
 	const [busyServices, setBusyServices] = useState<Record<string, boolean>>({});
+	const [now, setNow] = useState(() => Date.now());
 	const isRefreshingRef = useRef(false);
 	const isMountedRef = useRef(true);
-	const clearPendingTimeoutsRef = useRef<Record<string, number>>({});
 
 	useEffect(() => {
-		const clearPendingTimeouts = clearPendingTimeoutsRef.current;
-
 		return () => {
 			isMountedRef.current = false;
-			Object.values(clearPendingTimeouts).forEach((timeoutId) => {
-				window.clearTimeout(timeoutId);
-			});
 		};
 	}, []);
 
-	function startForcedLoading(serviceName: string) {
-		const existingTimeout = clearPendingTimeoutsRef.current[serviceName];
-		if (existingTimeout) {
-			window.clearTimeout(existingTimeout);
-		}
+	useEffect(() => {
+		const intervalId = window.setInterval(() => {
+			setNow(Date.now());
+		}, 250);
 
-		setPendingServices((current) => ({
-			...current,
-			[serviceName]: true,
-		}));
-
-		clearPendingTimeoutsRef.current[serviceName] = window.setTimeout(() => {
-			delete clearPendingTimeoutsRef.current[serviceName];
-
-			if (!isMountedRef.current) {
-				return;
-			}
-
-			setPendingServices((current) => {
-				const next = { ...current };
-				delete next[serviceName];
-				return next;
-			});
-		}, SERVICE_TOGGLE_LOADING_MS);
-	}
+		return () => {
+			window.clearInterval(intervalId);
+		};
+	}, []);
 
 	async function refreshServices(showLoading: boolean) {
 		if (isRefreshingRef.current) {
@@ -157,19 +134,24 @@ export function SidebarServices() {
 	}, []);
 
 	async function handleToggle(service: Dev5ServiceStatus) {
-		if (busyServices[service.service_name]) {
+		const serviceName = service.service_name;
+		const isPending = (pendingUntilByService[serviceName] ?? 0) > now;
+
+		if (busyServices[serviceName] || isPending) {
 			return;
 		}
 
 		setError(null);
 		const stableStatus = getStableServiceStatus(service);
-		const serviceName = service.service_name;
 
 		setBusyServices((current) => ({
 			...current,
 			[serviceName]: true,
 		}));
-		startForcedLoading(serviceName);
+		setPendingUntilByService((current) => ({
+			...current,
+			[serviceName]: Date.now() + SERVICE_TOGGLE_LOADING_MS,
+		}));
 
 		let toggleError: unknown = null;
 
@@ -222,16 +204,21 @@ export function SidebarServices() {
 					<div className="px-2 py-1 text-xs text-destructive">{error}</div>
 				) : (
 					<SidebarMenu className="pb-2">
-						{services.map((service) => (
-							<ServiceRow
-								key={`${service.dir_name}:${service.service_name}`}
-								service={service}
-								isPending={Boolean(pendingServices[service.service_name])}
-								isBusy={Boolean(busyServices[service.service_name])}
-								onToggle={handleToggle}
-								onSelect={handleSelect}
-							/>
-						))}
+						{services.map((service) => {
+							const isPending =
+								(pendingUntilByService[service.service_name] ?? 0) > now;
+
+							return (
+								<ServiceRow
+									key={`${service.dir_name}:${service.service_name}`}
+									service={service}
+									isPending={isPending}
+									isBusy={Boolean(busyServices[service.service_name]) || isPending}
+									onToggle={handleToggle}
+									onSelect={handleSelect}
+								/>
+							);
+						})}
 					</SidebarMenu>
 				)}
 			</SidebarGroupContent>
