@@ -1,4 +1,4 @@
-import { Power, PowerOff, RotateCcw } from "lucide-react";
+import { Loader2, Power, PowerOff, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -10,6 +10,11 @@ import {
 	SidebarMenuButton,
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import {
+	getPendingServiceStatus,
+	SERVICE_TOGGLE_LOADING_MS,
+	waitForDuration,
+} from "@/lib/service-toggle";
 import { ServiceStatus } from "./service-status";
 
 function ServiceRow({
@@ -21,6 +26,9 @@ function ServiceRow({
 	onToggle: (service: Dev5ServiceStatus) => void;
 	onSelect: (service: Dev5ServiceStatus) => void;
 }) {
+	const isPending =
+		service.status === "loadingOn" || service.status === "loadingOff";
+
 	return (
 		<SidebarMenuItem>
 			<SidebarMenuButton onClick={() => onSelect(service)}>
@@ -33,11 +41,14 @@ function ServiceRow({
 				</span>
 			</SidebarMenuButton>
 			<SidebarMenuAction
+				disabled={isPending}
 				onClick={() => {
 					onToggle(service);
 				}}
 			>
-				{service.status === "off" ? (
+				{isPending ? (
+					<Loader2 className="animate-spin" />
+				) : service.status === "off" ? (
 					<Power />
 				) : service.status === "on" ? (
 					<PowerOff />
@@ -54,7 +65,17 @@ export function SidebarServices() {
 	const [services, setServices] = useState<Dev5ServiceStatus[]>([]);
 	const [isLoading, setIsLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
+	const [pendingStatuses, setPendingStatuses] = useState<
+		Record<string, ReturnType<typeof getPendingServiceStatus>>
+	>({});
 	const isRefreshingRef = useRef(false);
+	const isMountedRef = useRef(true);
+
+	useEffect(() => {
+		return () => {
+			isMountedRef.current = false;
+		};
+	}, []);
 
 	async function refreshServices(showLoading: boolean) {
 		if (isRefreshingRef.current) {
@@ -102,7 +123,38 @@ export function SidebarServices() {
 		};
 	}, []);
 
+	const displayedServices = services.map((service) => {
+		const pendingStatus = pendingStatuses[service.service_name];
+		if (!pendingStatus) {
+			return service;
+		}
+
+		return {
+			...service,
+			status: pendingStatus,
+		};
+	});
+
 	async function handleToggle(service: Dev5ServiceStatus) {
+		if (pendingStatuses[service.service_name]) {
+			return;
+		}
+
+		setError(null);
+
+		const pendingStatus =
+			service.status === "on"
+				? getPendingServiceStatus("stop")
+				: getPendingServiceStatus("start");
+		const minimumDelay = waitForDuration(SERVICE_TOGGLE_LOADING_MS);
+
+		setPendingStatuses((current) => ({
+			...current,
+			[service.service_name]: pendingStatus,
+		}));
+
+		let toggleError: unknown = null;
+
 		try {
 			if (service.status === "on") {
 				await window.desktop.stopService(service.service_name);
@@ -113,9 +165,29 @@ export function SidebarServices() {
 				await new Promise((resolve) => setTimeout(resolve, 1000));
 				await window.desktop.startService(service.service_name);
 			}
+		} catch (error) {
+			toggleError = error;
+		}
 
-			await refreshServices(false);
-		} catch (toggleError) {
+		await minimumDelay;
+
+		if (!isMountedRef.current) {
+			return;
+		}
+
+		await refreshServices(false);
+
+		if (!isMountedRef.current) {
+			return;
+		}
+
+		setPendingStatuses((current) => {
+			const nextStatuses = { ...current };
+			delete nextStatuses[service.service_name];
+			return nextStatuses;
+		});
+
+		if (toggleError) {
 			setError(
 				toggleError instanceof Error
 					? toggleError.message
@@ -140,7 +212,7 @@ export function SidebarServices() {
 					<div className="px-2 py-1 text-xs text-destructive">{error}</div>
 				) : (
 					<SidebarMenu className="pb-2">
-						{services.map((service) => (
+						{displayedServices.map((service) => (
 							<ServiceRow
 								key={`${service.dir_name}:${service.service_name}`}
 								service={service}

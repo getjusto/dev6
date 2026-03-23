@@ -5,6 +5,12 @@ import { ChevronDown, ChevronUp, Loader2, Play, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { ansiToSegments } from '@/lib/ansi'
+import {
+  getPendingServiceStatus,
+  SERVICE_TOGGLE_LOADING_MS,
+  type ServiceToggleAction,
+  waitForDuration,
+} from '@/lib/service-toggle'
 
 type LogLineRender = {
   element: React.JSX.Element
@@ -149,12 +155,20 @@ export default function ServicePage() {
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [isLoadingLogs, setIsLoadingLogs] = useState(true)
   const [isToggling, setIsToggling] = useState(false)
+  const [pendingToggleAction, setPendingToggleAction] = useState<ServiceToggleAction | null>(null)
   const [error, setError] = useState<string | null>(null)
   const isRefreshingRef = useRef(false)
+  const isMountedRef = useRef(true)
   const refreshVersionRef = useRef(0)
   const logViewportRef = useRef<HTMLDivElement | null>(null)
   const shouldFollowRef = useRef(true)
   const matchRefs = useRef<(HTMLSpanElement | null)[]>([])
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false
+    }
+  }, [])
 
   function updateBottomState(viewport: HTMLDivElement) {
     const distanceFromBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight
@@ -226,6 +240,8 @@ export default function ServicePage() {
     shouldFollowRef.current = true
     setIsAtBottom(true)
     setIsLoadingLogs(true)
+    setIsToggling(false)
+    setPendingToggleAction(null)
     setError(null)
     setService(null)
     setLogs('')
@@ -239,6 +255,10 @@ export default function ServicePage() {
       window.clearInterval(intervalId)
     }
   }, [serviceName])
+
+  const displayedServiceStatus = pendingToggleAction
+    ? getPendingServiceStatus(pendingToggleAction)
+    : service?.status
 
   useEffect(() => {
     if (shouldFollowRef.current && logViewportRef.current) {
@@ -284,23 +304,45 @@ export default function ServicePage() {
   }, [activeMatchIndex, normalizedQuery, logs])
 
   async function handleToggle() {
-    if (!serviceName || !service) return
+    if (!serviceName || !service || pendingToggleAction) return
+
+    const nextAction: ServiceToggleAction = service.status === 'on' ? 'stop' : 'start'
+    const refreshVersion = refreshVersionRef.current
+    const minimumDelay = waitForDuration(SERVICE_TOGGLE_LOADING_MS)
+    let toggleError: unknown = null
+
+    setError(null)
+    setIsToggling(true)
+    setPendingToggleAction(nextAction)
 
     try {
-      setIsToggling(true)
-
       if (service.status === 'on') {
         await window.desktop.stopService(serviceName)
       } else {
         await window.desktop.startService(serviceName)
       }
-
-      await refreshLogs(false)
-    } catch (toggleError) {
-      setError(toggleError instanceof Error ? toggleError.message : 'Could not change service state.')
-    } finally {
-      setIsToggling(false)
+    } catch (error) {
+      toggleError = error
     }
+
+    await minimumDelay
+
+    if (!isMountedRef.current || refreshVersion !== refreshVersionRef.current) {
+      return
+    }
+
+    await refreshLogs(false)
+
+    if (!isMountedRef.current || refreshVersion !== refreshVersionRef.current) {
+      return
+    }
+
+    if (toggleError) {
+      setError(toggleError instanceof Error ? toggleError.message : 'Could not change service state.')
+    }
+
+    setPendingToggleAction(null)
+    setIsToggling(false)
   }
 
   function handleNextMatch() {
@@ -324,19 +366,25 @@ export default function ServicePage() {
             </div>
             <div className="shrink-0 flex items-center gap-2">
               <Button
-                variant={service?.status === 'on' ? 'destructive' : 'outline'}
+                variant={displayedServiceStatus === 'on' ? 'destructive' : 'outline'}
                 size="sm"
                 onClick={() => void handleToggle()}
                 disabled={!service || isToggling}
               >
                 {isToggling ? (
                   <Loader2 className="animate-spin" />
-                ) : service?.status === 'on' ? (
+                ) : displayedServiceStatus === 'on' ? (
                   <Square />
                 ) : (
                   <Play />
                 )}
-                {service?.status === 'on' ? 'Stop' : 'Start'}
+                {isToggling
+                  ? pendingToggleAction === 'stop'
+                    ? 'Stopping…'
+                    : 'Starting…'
+                  : displayedServiceStatus === 'on'
+                    ? 'Stop'
+                    : 'Start'}
               </Button>
             </div>
           </div>
@@ -375,7 +423,7 @@ export default function ServicePage() {
           <div
             ref={logViewportRef}
             className={`h-full min-h-0 min-w-0 overflow-y-auto overflow-x-hidden font-mono text-[12px] leading-5 ${
-              service?.status === 'off' ? 'opacity-50' : ''
+              displayedServiceStatus === 'off' ? 'opacity-50' : ''
             }`}
             onScroll={(event) => {
               updateBottomState(event.currentTarget)
