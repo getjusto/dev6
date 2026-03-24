@@ -19,13 +19,20 @@ function readTerminalTheme() {
 
 export function TerminalSessionView({
   sessionId,
+  appKind,
   active = true,
 }: {
   sessionId: string
+  appKind: TerminalSessionSummary['appKind']
   active?: boolean
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
+  const appKindRef = useRef(appKind)
+
+  useEffect(() => {
+    appKindRef.current = appKind
+  }, [appKind])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -74,6 +81,19 @@ export function TerminalSessionView({
         return false
       }
 
+      if (
+        appKindRef.current !== 'terminal' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        event.shiftKey &&
+        key === 'enter'
+      ) {
+        event.preventDefault()
+        window.desktop.writeTerminalSession(sessionId, '\n')
+        return false
+      }
+
       if (event.metaKey && !event.ctrlKey && !event.altKey && key === 'a') {
         event.preventDefault()
         terminal.selectAll()
@@ -89,21 +109,31 @@ export function TerminalSessionView({
         }
       }
 
-      if (event.metaKey && !event.ctrlKey && !event.altKey && key === 'v') {
-        event.preventDefault()
-        void navigator.clipboard.readText().then((text) => {
-          if (text) {
-            window.desktop.writeTerminalSession(sessionId, text)
-          }
-        })
-        return false
-      }
-
       return true
     })
 
     terminal.loadAddon(fitAddon)
     terminal.open(viewport)
+
+    const handlePaste = (event: ClipboardEvent) => {
+      const sessionAppKind = appKindRef.current
+
+      if (sessionAppKind === 'codex' || sessionAppKind === 'claude') {
+        event.preventDefault()
+        window.desktop.writeTerminalSession(sessionId, '\u0016')
+        return
+      }
+
+      const text = event.clipboardData?.getData('text/plain') ?? ''
+      if (!text) {
+        return
+      }
+
+      event.preventDefault()
+      window.desktop.writeTerminalSession(sessionId, text)
+    }
+
+    viewport.addEventListener('paste', handlePaste)
 
     const syncSize = () => {
       requestAnimationFrame(() => {
@@ -195,6 +225,7 @@ export function TerminalSessionView({
     return () => {
       disposed = true
       terminalRef.current = null
+      viewport.removeEventListener('paste', handlePaste)
       resizeObserver.disconnect()
       themeObserver.disconnect()
       terminalDataDisposable.dispose()

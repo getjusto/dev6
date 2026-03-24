@@ -65,6 +65,7 @@ export default function TerminalsPage() {
               >
                 <TerminalSessionView
                   sessionId={session.id}
+                  appKind={session.appKind}
                   active={session.id === activeSession.id}
                 />
               </div>
