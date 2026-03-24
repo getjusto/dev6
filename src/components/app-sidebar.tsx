@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Loader2, Settings, Square } from 'lucide-react'
 
 import { SidebarServices } from '@/components/sidebar-services'
@@ -18,6 +18,8 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
+
+const GIT_SUMMARY_REFRESH_MS = 5000
 
 function editorLabel(editor: 'zed' | 'vscode' | 'cursor') {
   switch (editor) {
@@ -42,8 +44,10 @@ function editorIconPath(editor: 'zed' | 'vscode' | 'cursor') {
 }
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const location = useLocation()
   const navigate = useNavigate()
   const [branchName, setBranchName] = React.useState('Dev6')
+  const [gitSummary, setGitSummary] = React.useState({ additions: 0, deletions: 0 })
   const [isOpeningEditor, setIsOpeningEditor] = React.useState(false)
   const [isStoppingAll, setIsStoppingAll] = React.useState(false)
   const [preferredEditor, setPreferredEditor] = React.useState<'zed' | 'vscode' | 'cursor'>('zed')
@@ -52,19 +56,38 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   React.useEffect(() => {
     let cancelled = false
 
+    async function refreshGitSummary() {
+      const snapshot = await window.desktop.getWorkingTreeChanges()
+
+      if (cancelled) return
+
+      if (snapshot.branch) {
+        setBranchName(snapshot.branch)
+      }
+
+      setGitSummary({
+        additions: snapshot.additions,
+        deletions: snapshot.deletions,
+      })
+    }
+
     async function loadSidebarState(nextEditor?: 'zed' | 'vscode' | 'cursor') {
-      const [branch, settings, editors] = await Promise.all([
-        window.desktop.getCurrentBranch(),
+      const [snapshot, settings, editors] = await Promise.all([
+        window.desktop.getWorkingTreeChanges(),
         window.desktop.getSettings(),
         window.desktop.getAvailableEditors(),
       ])
 
       if (cancelled) return
 
-      if (branch) {
-        setBranchName(branch)
+      if (snapshot.branch) {
+        setBranchName(snapshot.branch)
       }
 
+      setGitSummary({
+        additions: snapshot.additions,
+        deletions: snapshot.deletions,
+      })
       setAvailableEditors(editors)
 
       const fallbackEditor = editors[0] ?? 'zed'
@@ -77,6 +100,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
 
     void loadSidebarState()
+    const intervalId = window.setInterval(() => {
+      void refreshGitSummary()
+    }, GIT_SUMMARY_REFRESH_MS)
 
     const handleSettingsChanged = (event: Event) => {
       const detail = (event as CustomEvent<Partial<AppSettings>>).detail
@@ -90,6 +116,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
     return () => {
       cancelled = true
+      window.clearInterval(intervalId)
       window.removeEventListener('desktop:settings-changed', handleSettingsChanged)
     }
   }, [])
@@ -128,8 +155,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarHeader className="drag-region pt-[38px]">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
-              <Link to="/">
+            <SidebarMenuButton
+              size="lg"
+              asChild
+              data-active={location.pathname === '/' || location.pathname === '/branch'}
+            >
+              <Link to="/branch">
                 <img
                   src={isoDarkUrl}
                   alt="Justo"
@@ -144,6 +175,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   <span className="truncate font-medium">Justo</span>
                   <span className="truncate text-xs">{branchName}</span>
                 </div>
+                {gitSummary.additions > 0 || gitSummary.deletions > 0 ? (
+                  <div className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[11px]">
+                    {gitSummary.additions > 0 ? (
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        +{gitSummary.additions}
+                      </span>
+                    ) : null}
+                    {gitSummary.deletions > 0 ? (
+                      <span className="text-rose-600 dark:text-rose-400">
+                        -{gitSummary.deletions}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

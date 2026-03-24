@@ -64,6 +64,35 @@ declare global {
 		http_error: string | null;
 	}
 
+	type GitWorkingTreeFileStatus =
+		| "added"
+		| "changed"
+		| "conflicted"
+		| "copied"
+		| "deleted"
+		| "modified"
+		| "renamed"
+		| "untracked";
+
+	interface GitWorkingTreeFile {
+		path: string;
+		previousPath: string | null;
+		indexStatus: string;
+		workingTreeStatus: string;
+		status: GitWorkingTreeFileStatus;
+		additions: number;
+		deletions: number;
+		diff: string;
+	}
+
+	interface GitWorkingTreeSnapshot {
+		branch: string | null;
+		repositoryPath: string;
+		additions: number;
+		deletions: number;
+		files: GitWorkingTreeFile[];
+	}
+
 	interface DesktopApi {
 		getAppInfo: () => Promise<AppInfo>;
 		getUpdateStatus: () => Promise<UpdateStatus>;
@@ -82,6 +111,10 @@ declare global {
 			lineCount?: number,
 		) => Promise<string>;
 		getCurrentBranch: () => Promise<string | null>;
+		getWorkingTreeChanges: () => Promise<GitWorkingTreeSnapshot>;
+		stageWorkingTreeFile: (filePath: string) => Promise<{ ok: boolean }>;
+		unstageWorkingTreeFile: (filePath: string) => Promise<{ ok: boolean }>;
+		discardWorkingTreeFile: (filePath: string) => Promise<{ ok: boolean }>;
 		listTerminalSessions: () => Promise<TerminalSessionSummary[]>;
 		createTerminalSession: (options?: {
 			cwd?: string;
@@ -103,6 +136,10 @@ declare global {
 			callback: (sessions: TerminalSessionSummary[]) => void,
 		) => () => void;
 		openServicesInEditor: (
+			editor?: "zed" | "vscode" | "cursor",
+		) => Promise<{ ok: boolean }>;
+		openServicesFileInEditor: (
+			filePath: string,
 			editor?: "zed" | "vscode" | "cursor",
 		) => Promise<{ ok: boolean }>;
 		getEditorInfo: (

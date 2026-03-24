@@ -23,6 +23,32 @@ const EDITOR_APP_NAMES = {
 } as const
 type TerminalSessionStatus = 'running' | 'exited'
 type TerminalSessionAppKind = 'terminal' | 'codex' | 'claude'
+type GitWorkingTreeFileStatus =
+  | 'added'
+  | 'changed'
+  | 'conflicted'
+  | 'copied'
+  | 'deleted'
+  | 'modified'
+  | 'renamed'
+  | 'untracked'
+type GitWorkingTreeFileRecord = {
+  path: string
+  previousPath: string | null
+  indexStatus: string
+  workingTreeStatus: string
+  status: GitWorkingTreeFileStatus
+  additions: number
+  deletions: number
+  diff: string
+}
+type GitWorkingTreeSnapshot = {
+  branch: string | null
+  repositoryPath: string
+  additions: number
+  deletions: number
+  files: GitWorkingTreeFileRecord[]
+}
 
 type TerminalSessionRecord = {
   id: string
@@ -62,6 +88,7 @@ const TERMINAL_APP_BUNDLES = {
   claude: 'Claude.app',
 } as const
 const TERMINAL_TITLE_PATTERN = /\u001B\](?:0|2);([\s\S]*?)(?:\u0007|\u001B\\)/g
+const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
 
 // --- Settings persistence ---
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
@@ -242,6 +269,22 @@ async function openServicesInEditor(editor: keyof typeof EDITOR_APP_NAMES) {
   const appName = EDITOR_APP_NAMES[editor] ?? EDITOR_APP_NAMES.zed
 
   await execFileAsync('open', ['-a', appName, servicesPath], {
+    encoding: 'utf-8',
+  })
+}
+
+async function openServicesFileInEditor(filePath: string, editor?: keyof typeof EDITOR_APP_NAMES) {
+  const servicesPath = getServicesPath()
+  const resolvedFilePath = resolveRepositoryFilePath(servicesPath, filePath)
+  const configuredEditor = readSettings().preferredEditor
+  const selectedEditor =
+    editor ??
+    (configuredEditor === 'zed' || configuredEditor === 'vscode' || configuredEditor === 'cursor'
+      ? configuredEditor
+      : 'zed')
+  const appName = EDITOR_APP_NAMES[selectedEditor] ?? EDITOR_APP_NAMES.zed
+
+  await execFileAsync('open', ['-a', appName, resolvedFilePath], {
     encoding: 'utf-8',
   })
 }
@@ -855,6 +898,307 @@ async function getCurrentServicesBranch(): Promise<string | null> {
   }
 }
 
+async function runGitInServices(
+  args: string[],
+  options?: { encoding?: BufferEncoding },
+): Promise<string> {
+  const servicesPath = getServicesPath()
+  const env = await getCommandEnv()
+  const { stdout } = await execFileAsync('git', args, {
+    cwd: servicesPath,
+    env,
+    encoding: options?.encoding ?? 'utf-8',
+    maxBuffer: 20 * 1024 * 1024,
+  })
+
+  return stdout
+}
+
+function getGitWorkingTreeStatus(
+  indexStatus: string,
+  workingTreeStatus: string,
+  previousPath: string | null,
+): GitWorkingTreeFileStatus {
+  if (indexStatus === '?' && workingTreeStatus === '?') {
+    return 'untracked'
+  }
+
+  if (indexStatus === 'U' || workingTreeStatus === 'U') {
+    return 'conflicted'
+  }
+
+  if (indexStatus === 'R' || workingTreeStatus === 'R' || previousPath) {
+    return 'renamed'
+  }
+
+  if (indexStatus === 'C' || workingTreeStatus === 'C') {
+    return 'copied'
+  }
+
+  if (indexStatus === 'A') {
+    return 'added'
+  }
+
+  if (indexStatus === 'D' || workingTreeStatus === 'D') {
+    return 'deleted'
+  }
+
+  if (indexStatus === 'M' || workingTreeStatus === 'M') {
+    return 'modified'
+  }
+
+  return 'changed'
+}
+
+function parseGitStatusEntries(output: string) {
+  const entries = output.split('\u0000').filter(Boolean)
+  const files: Array<{
+    path: string
+    previousPath: string | null
+    indexStatus: string
+    workingTreeStatus: string
+  }> = []
+
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]
+    if (entry.length < 3) {
+      continue
+    }
+
+    const indexStatus = entry[0] ?? ' '
+    const workingTreeStatus = entry[1] ?? ' '
+    let path = entry.slice(3)
+    let previousPath: string | null = null
+
+    if (
+      indexStatus === 'R' ||
+      workingTreeStatus === 'R' ||
+      indexStatus === 'C' ||
+      workingTreeStatus === 'C'
+    ) {
+      previousPath = path
+      path = entries[index + 1] ?? path
+      index += 1
+    }
+
+    files.push({
+      path,
+      previousPath,
+      indexStatus,
+      workingTreeStatus,
+    })
+  }
+
+  return files
+}
+
+function buildUntrackedFileDiff(repositoryPath: string, filePath: string): string {
+  const absolutePath = path.join(repositoryPath, filePath)
+  const stats = fs.statSync(absolutePath)
+  const mode = stats.mode & 0o111 ? '100755' : '100644'
+  const fileBuffer = fs.readFileSync(absolutePath)
+
+  if (fileBuffer.includes(0)) {
+    return [
+      `diff --git a/${filePath} b/${filePath}`,
+      `new file mode ${mode}`,
+      'Binary file not shown.',
+    ].join('\n')
+  }
+
+  const fileText = fileBuffer.toString('utf-8')
+  const lines = fileText === '' ? [] : fileText.split('\n')
+  const lastLineHasNewline = fileText.endsWith('\n')
+  const effectiveLines = lastLineHasNewline ? lines.slice(0, -1) : lines
+  const diffLines = [
+    `diff --git a/${filePath} b/${filePath}`,
+    `new file mode ${mode}`,
+    '--- /dev/null',
+    `+++ b/${filePath}`,
+    `@@ -0,0 +1,${effectiveLines.length} @@`,
+    ...effectiveLines.map((line) => `+${line}`),
+  ]
+
+  if (!lastLineHasNewline) {
+    diffLines.push('\\ No newline at end of file')
+  }
+
+  return diffLines.join('\n')
+}
+
+async function getGitDiffBaseRef(): Promise<string> {
+  try {
+    await runGitInServices(['rev-parse', '--verify', 'HEAD'])
+    return 'HEAD'
+  } catch {
+    return EMPTY_TREE_HASH
+  }
+}
+
+function countDiffLines(diff: string) {
+  let additions = 0
+  let deletions = 0
+
+  for (const line of diff.split('\n')) {
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      continue
+    }
+
+    if (line.startsWith('+')) {
+      additions += 1
+      continue
+    }
+
+    if (line.startsWith('-')) {
+      deletions += 1
+    }
+  }
+
+  return { additions, deletions }
+}
+
+function resolveRepositoryFilePath(repositoryPath: string, filePath: string) {
+  const resolvedPath = path.resolve(repositoryPath, filePath)
+  const relativePath = path.relative(repositoryPath, resolvedPath)
+
+  if (path.isAbsolute(filePath) || relativePath.startsWith('..') || path.isAbsolute(relativePath)) {
+    throw new Error('Invalid repository file path.')
+  }
+
+  return resolvedPath
+}
+
+async function discardWorkingTreeFile(filePath: string) {
+  const repositoryPath = getServicesPath()
+  const resolvedFilePath = resolveRepositoryFilePath(repositoryPath, filePath)
+  const [statusOutput, diffBaseRef] = await Promise.all([
+    runGitInServices(['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+    getGitDiffBaseRef(),
+  ])
+
+  const statusEntry = parseGitStatusEntries(statusOutput).find((entry) => entry.path === filePath)
+
+  if (!statusEntry) {
+    return { ok: true }
+  }
+
+  const status = getGitWorkingTreeStatus(
+    statusEntry.indexStatus,
+    statusEntry.workingTreeStatus,
+    statusEntry.previousPath,
+  )
+
+  if (status === 'untracked') {
+    fs.rmSync(resolvedFilePath, { recursive: true, force: true })
+    return { ok: true }
+  }
+
+  try {
+    await runGitInServices(['restore', '--source', diffBaseRef, '--staged', '--worktree', '--', filePath])
+  } catch {
+    try {
+      await runGitInServices(['restore', '--source', diffBaseRef, '--worktree', '--', filePath])
+      await runGitInServices(['restore', '--staged', '--', filePath])
+    } catch {
+      await runGitInServices(['checkout', '--', filePath])
+    }
+  }
+
+  return { ok: true }
+}
+
+async function stageWorkingTreeFile(filePath: string) {
+  const repositoryPath = getServicesPath()
+  resolveRepositoryFilePath(repositoryPath, filePath)
+  await runGitInServices(['add', '-A', '--', filePath])
+  return { ok: true }
+}
+
+async function unstageWorkingTreeFile(filePath: string) {
+  const repositoryPath = getServicesPath()
+  resolveRepositoryFilePath(repositoryPath, filePath)
+
+  try {
+    await runGitInServices(['restore', '--staged', '--', filePath])
+  } catch {
+    try {
+      await runGitInServices(['reset', 'HEAD', '--', filePath])
+    } catch {
+      await runGitInServices(['rm', '--cached', '-r', '--ignore-unmatch', '--', filePath])
+    }
+  }
+
+  return { ok: true }
+}
+
+async function getWorkingTreeChanges(): Promise<GitWorkingTreeSnapshot> {
+  const repositoryPath = getServicesPath()
+  const [branch, statusOutput, diffBaseRef] = await Promise.all([
+    getCurrentServicesBranch(),
+    runGitInServices(['status', '--porcelain=v1', '-z', '--untracked-files=all']),
+    getGitDiffBaseRef(),
+  ])
+
+  const statusEntries = parseGitStatusEntries(statusOutput)
+  const files = await Promise.all(
+    statusEntries.map(async ({ path: filePath, previousPath, indexStatus, workingTreeStatus }) => {
+      const status = getGitWorkingTreeStatus(indexStatus, workingTreeStatus, previousPath)
+      let diff = ''
+
+      if (status === 'untracked') {
+        diff = buildUntrackedFileDiff(repositoryPath, filePath)
+      } else {
+        try {
+          diff = await runGitInServices([
+            'diff',
+            '--no-ext-diff',
+            '--binary',
+            diffBaseRef,
+            '--',
+            filePath,
+          ])
+        } catch {
+          try {
+            diff = await runGitInServices(['diff', '--no-ext-diff', '--binary', '--', filePath])
+          } catch {
+            diff = `diff --git a/${filePath} b/${filePath}\nFile is in a conflicted state.`
+          }
+        }
+      }
+
+      const { additions, deletions } = countDiffLines(diff)
+
+      return {
+        path: filePath,
+        previousPath,
+        indexStatus,
+        workingTreeStatus,
+        status,
+        additions,
+        deletions,
+        diff,
+      }
+    }),
+  )
+
+  files.sort((left, right) => left.path.localeCompare(right.path))
+  const totals = files.reduce(
+    (summary, file) => ({
+      additions: summary.additions + file.additions,
+      deletions: summary.deletions + file.deletions,
+    }),
+    { additions: 0, deletions: 0 },
+  )
+
+  return {
+    branch,
+    repositoryPath,
+    additions: totals.additions,
+    deletions: totals.deletions,
+    files,
+  }
+}
+
 function sendUpdateState(status: string, detail?: string) {
   updateState = status
 
@@ -1056,6 +1400,14 @@ app.whenReady().then(() => {
   )
 
   ipcMain.handle(
+    'services:open-file-in-editor',
+    async (_event, filePath: string, editor?: keyof typeof EDITOR_APP_NAMES) => {
+      await openServicesFileInEditor(filePath, editor)
+      return { ok: true }
+    },
+  )
+
+  ipcMain.handle(
     'services:get-editor-info',
     async (_event, editor: keyof typeof EDITOR_APP_NAMES = 'zed') => {
       return getEditorInfo(editor)
@@ -1068,6 +1420,22 @@ app.whenReady().then(() => {
 
   ipcMain.handle('git:get-current-branch', async () => {
     return getCurrentServicesBranch()
+  })
+
+  ipcMain.handle('git:get-working-tree-changes', async () => {
+    return getWorkingTreeChanges()
+  })
+
+  ipcMain.handle('git:stage-working-tree-file', async (_event, filePath: string) => {
+    return stageWorkingTreeFile(filePath)
+  })
+
+  ipcMain.handle('git:unstage-working-tree-file', async (_event, filePath: string) => {
+    return unstageWorkingTreeFile(filePath)
+  })
+
+  ipcMain.handle('git:discard-working-tree-file', async (_event, filePath: string) => {
+    return discardWorkingTreeFile(filePath)
   })
 
   // --- Services folder ---

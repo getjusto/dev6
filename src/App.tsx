@@ -3,6 +3,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 import { AppSidebar } from '@/components/app-sidebar'
 import { TerminalSessionsProvider } from '@/components/terminal-sessions-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
+import BranchPage from '@/pages/branch'
 import ServicePage from '@/pages/service'
 import SettingsPage from '@/pages/settings'
 import TerminalsPage from '@/pages/terminals'
@@ -31,7 +32,8 @@ function App() {
         <AppSidebar />
         <SidebarInset className="min-h-0 min-w-0 overflow-hidden">
           <Routes>
-            <Route path="/" element={<Navigate to="/terminals" replace />} />
+            <Route path="/" element={<Navigate to="/branch" replace />} />
+            <Route path="/branch" element={<BranchPage />} />
             <Route path="/services/:serviceName" element={<ServicePage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/terminals" element={<TerminalsPage />} />

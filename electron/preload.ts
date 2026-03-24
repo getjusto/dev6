@@ -53,6 +53,10 @@ contextBridge.exposeInMainWorld('desktop', {
   getServiceLogs: (serviceName: string, lineCount?: number) =>
     ipcRenderer.invoke('dev5:logs', serviceName, lineCount),
   getCurrentBranch: () => ipcRenderer.invoke('git:get-current-branch'),
+  getWorkingTreeChanges: () => ipcRenderer.invoke('git:get-working-tree-changes'),
+  stageWorkingTreeFile: (filePath: string) => ipcRenderer.invoke('git:stage-working-tree-file', filePath),
+  unstageWorkingTreeFile: (filePath: string) => ipcRenderer.invoke('git:unstage-working-tree-file', filePath),
+  discardWorkingTreeFile: (filePath: string) => ipcRenderer.invoke('git:discard-working-tree-file', filePath),
   listTerminalSessions: () => ipcRenderer.invoke('terminals:list'),
   createTerminalSession: (options?: { cwd?: string }) => ipcRenderer.invoke('terminals:create', options),
   closeTerminalSession: (sessionId: string) => ipcRenderer.invoke('terminals:close', sessionId),
@@ -90,6 +94,8 @@ contextBridge.exposeInMainWorld('desktop', {
   },
   openServicesInEditor: (editor?: 'zed' | 'vscode' | 'cursor') =>
     ipcRenderer.invoke('services:open-editor', editor),
+  openServicesFileInEditor: (filePath: string, editor?: 'zed' | 'vscode' | 'cursor') =>
+    ipcRenderer.invoke('services:open-file-in-editor', filePath, editor),
   getEditorInfo: (editor?: 'zed' | 'vscode' | 'cursor') =>
     ipcRenderer.invoke('services:get-editor-info', editor),
   getAvailableEditors: () => ipcRenderer.invoke('services:get-available-editors'),
