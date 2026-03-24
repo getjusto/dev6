@@ -18,6 +18,7 @@ This is an electron app made for Engineer in Justo company to help them develop 
 - Lint: `pnpm lint`
 - Build: `pnpm build`
 - Package mac app: `pnpm dist:mac`
+- Test the Electron app using the `peekaboo see --app "Electron" --window-title "app"` CLI
 
 ## callDev5
 

@@ -53,10 +53,18 @@ contextBridge.exposeInMainWorld('desktop', {
   getServiceLogs: (serviceName: string, lineCount?: number) =>
     ipcRenderer.invoke('dev5:logs', serviceName, lineCount),
   getCurrentBranch: () => ipcRenderer.invoke('git:get-current-branch'),
+  listLocalBranches: () => ipcRenderer.invoke('git:list-local-branches'),
+  listPendingPushCommits: () => ipcRenderer.invoke('git:list-pending-push-commits'),
   getWorkingTreeChanges: () => ipcRenderer.invoke('git:get-working-tree-changes'),
   stageWorkingTreeFile: (filePath: string) => ipcRenderer.invoke('git:stage-working-tree-file', filePath),
   unstageWorkingTreeFile: (filePath: string) => ipcRenderer.invoke('git:unstage-working-tree-file', filePath),
+  commitWorkingTree: (message: string) => ipcRenderer.invoke('git:commit-working-tree', message),
+  generateCommitMessage: () => ipcRenderer.invoke('git:generate-commit-message'),
   discardWorkingTreeFile: (filePath: string) => ipcRenderer.invoke('git:discard-working-tree-file', filePath),
+  runPrimaryBranchAction: () => ipcRenderer.invoke('git:run-primary-branch-action'),
+  switchBranch: (branchName: string) => ipcRenderer.invoke('git:switch-branch', branchName),
+  createAndSwitchBranch: (branchName: string) =>
+    ipcRenderer.invoke('git:create-and-switch-branch', branchName),
   listTerminalSessions: () => ipcRenderer.invoke('terminals:list'),
   createTerminalSession: (options?: { cwd?: string }) => ipcRenderer.invoke('terminals:create', options),
   closeTerminalSession: (sessionId: string) => ipcRenderer.invoke('terminals:close', sessionId),

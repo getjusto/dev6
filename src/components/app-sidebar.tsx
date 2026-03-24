@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/sidebar'
 
 const GIT_SUMMARY_REFRESH_MS = 5000
+const WORKING_TREE_CHANGED_EVENT = 'desktop:working-tree-changed'
 
 function editorLabel(editor: 'zed' | 'vscode' | 'cursor') {
   switch (editor) {
@@ -112,12 +113,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       }
     }
 
+    const handleWorkingTreeChanged = () => {
+      void refreshGitSummary()
+    }
+
     window.addEventListener('desktop:settings-changed', handleSettingsChanged)
+    window.addEventListener(WORKING_TREE_CHANGED_EVENT, handleWorkingTreeChanged)
 
     return () => {
       cancelled = true
       window.clearInterval(intervalId)
       window.removeEventListener('desktop:settings-changed', handleSettingsChanged)
+      window.removeEventListener(WORKING_TREE_CHANGED_EVENT, handleWorkingTreeChanged)
     }
   }, [])
 

@@ -64,6 +64,19 @@ declare global {
 		http_error: string | null;
 	}
 
+	interface GitBranchRecord {
+		name: string;
+		current: boolean;
+	}
+
+	interface GitPendingPushCommit {
+		hash: string;
+		shortHash: string;
+		subject: string;
+		authorName: string;
+		committedAt: string;
+	}
+
 	type GitWorkingTreeFileStatus =
 		| "added"
 		| "changed"
@@ -73,6 +86,16 @@ declare global {
 		| "modified"
 		| "renamed"
 		| "untracked";
+
+	type GitBranchSyncAction = "none" | "pull" | "push";
+
+	interface GitBranchSyncState {
+		action: GitBranchSyncAction;
+		ahead: number;
+		behind: number;
+		hasUpstream: boolean;
+		upstream: string | null;
+	}
 
 	interface GitWorkingTreeFile {
 		path: string;
@@ -90,6 +113,7 @@ declare global {
 		repositoryPath: string;
 		additions: number;
 		deletions: number;
+		sync: GitBranchSyncState;
 		files: GitWorkingTreeFile[];
 	}
 
@@ -111,10 +135,26 @@ declare global {
 			lineCount?: number,
 		) => Promise<string>;
 		getCurrentBranch: () => Promise<string | null>;
+		listLocalBranches: () => Promise<GitBranchRecord[]>;
+		listPendingPushCommits: () => Promise<GitPendingPushCommit[]>;
 		getWorkingTreeChanges: () => Promise<GitWorkingTreeSnapshot>;
 		stageWorkingTreeFile: (filePath: string) => Promise<{ ok: boolean }>;
 		unstageWorkingTreeFile: (filePath: string) => Promise<{ ok: boolean }>;
+		commitWorkingTree: (message: string) => Promise<{ ok: boolean }>;
+		generateCommitMessage: () => Promise<{ message: string }>;
 		discardWorkingTreeFile: (filePath: string) => Promise<{ ok: boolean }>;
+		runPrimaryBranchAction: () => Promise<{
+			ok: boolean;
+			action: GitBranchSyncAction;
+		}>;
+		switchBranch: (branchName: string) => Promise<{
+			ok: boolean;
+			branch: string;
+		}>;
+		createAndSwitchBranch: (branchName: string) => Promise<{
+			ok: boolean;
+			branch: string;
+		}>;
 		listTerminalSessions: () => Promise<TerminalSessionSummary[]>;
 		createTerminalSession: (options?: {
 			cwd?: string;

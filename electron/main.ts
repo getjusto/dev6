@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { execFile, execSync } from 'node:child_process'
+import { execFile, execSync, spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -16,6 +16,8 @@ let mainWindow: BrowserWindow | null = null
 const MAX_TERMINAL_BUFFER_CHARS = 2_000_000
 const LOG_TAIL_CHUNK_BYTES = 64 * 1024
 const TERMINAL_CWD_REFRESH_MS = 2000
+const GIT_FETCH_THROTTLE_MS = 60_000
+const GIT_COMMAND_TIMEOUT_MS = 15_000
 const EDITOR_APP_NAMES = {
   zed: 'Zed',
   vscode: 'Visual Studio Code',
@@ -32,6 +34,25 @@ type GitWorkingTreeFileStatus =
   | 'modified'
   | 'renamed'
   | 'untracked'
+type GitBranchSyncAction = 'none' | 'pull' | 'push'
+type GitBranchRecord = {
+  name: string
+  current: boolean
+}
+type GitPendingPushCommitRecord = {
+  hash: string
+  shortHash: string
+  subject: string
+  authorName: string
+  committedAt: string
+}
+type GitBranchSyncState = {
+  action: GitBranchSyncAction
+  ahead: number
+  behind: number
+  hasUpstream: boolean
+  upstream: string | null
+}
 type GitWorkingTreeFileRecord = {
   path: string
   previousPath: string | null
@@ -47,7 +68,17 @@ type GitWorkingTreeSnapshot = {
   repositoryPath: string
   additions: number
   deletions: number
+  sync: GitBranchSyncState
   files: GitWorkingTreeFileRecord[]
+}
+type GeneratedCommitMessage = {
+  subject: string
+  body: string
+}
+type ClaudeStructuredOutputResult<T> = {
+  is_error?: boolean
+  result?: string
+  structured_output?: T
 }
 
 type TerminalSessionRecord = {
@@ -73,6 +104,9 @@ const terminalSessions = new Map<string, TerminalSessionRecord>()
 const terminalAppIconCache = new Map<TerminalSessionAppKind, string | null>()
 let terminalLabelCounter = 0
 let terminalCwdInterval: NodeJS.Timeout | null = null
+let gitFetchPromise: Promise<void> | null = null
+let gitServicesQueue: Promise<void> = Promise.resolve()
+let lastGitFetchAttemptAt = 0
 const EDITOR_APP_BUNDLES = {
   zed: 'Zed.app',
   vscode: 'Visual Studio Code.app',
@@ -89,6 +123,23 @@ const TERMINAL_APP_BUNDLES = {
 } as const
 const TERMINAL_TITLE_PATTERN = /\u001B\](?:0|2);([\s\S]*?)(?:\u0007|\u001B\\)/g
 const EMPTY_TREE_HASH = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+const GENERATED_COMMIT_MESSAGE_JSON_SCHEMA = JSON.stringify({
+  type: 'object',
+  properties: {
+    subject: {
+      type: 'string',
+      description:
+        'Plain-text Spanish git commit subject in a single line. Do not use markdown, quotes, or backticks.',
+    },
+    body: {
+      type: 'string',
+      description:
+        'Plain-text Spanish git commit body. Use an empty string when a body is unnecessary. Do not use markdown, quotes, or backticks.',
+    },
+  },
+  required: ['subject', 'body'],
+  additionalProperties: false,
+})
 
 // --- Settings persistence ---
 const settingsPath = path.join(app.getPath('userData'), 'settings.json')
@@ -883,22 +934,24 @@ async function stopAllServices(): Promise<unknown> {
 
 async function getCurrentServicesBranch(): Promise<string | null> {
   try {
-    const servicesPath = getServicesPath()
-    const env = await getCommandEnv()
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: servicesPath,
-      encoding: 'utf-8',
-      env,
-    })
-
-    const branch = stdout.trim()
+    const branch = (await runReadOnlyGitInServices(['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
     return branch.length > 0 ? branch : null
   } catch {
     return null
   }
 }
 
-async function runGitInServices(
+function enqueueGitServicesCommand<T>(run: () => Promise<T>) {
+  const nextRun = gitServicesQueue.then(run, run)
+  gitServicesQueue = nextRun.then(
+    () => undefined,
+    () => undefined,
+  )
+
+  return nextRun
+}
+
+async function execGitInServices(
   args: string[],
   options?: { encoding?: BufferEncoding },
 ): Promise<string> {
@@ -909,9 +962,231 @@ async function runGitInServices(
     env,
     encoding: options?.encoding ?? 'utf-8',
     maxBuffer: 20 * 1024 * 1024,
+    timeout: GIT_COMMAND_TIMEOUT_MS,
+    killSignal: 'SIGKILL',
   })
 
   return stdout
+}
+
+async function runGitInServices(
+  args: string[],
+  options?: { encoding?: BufferEncoding },
+): Promise<string> {
+  return enqueueGitServicesCommand(() => execGitInServices(args, options))
+}
+
+async function runReadOnlyGitInServices(
+  args: string[],
+  options?: { encoding?: BufferEncoding },
+): Promise<string> {
+  return execGitInServices(args, options)
+}
+
+function getCommandFailureMessage(error: unknown, fallback: string) {
+  if (!(error instanceof Error)) {
+    return fallback
+  }
+
+  const stdout =
+    'stdout' in error && typeof error.stdout === 'string' ? error.stdout.trim() : ''
+  const stderr =
+    'stderr' in error && typeof error.stderr === 'string' ? error.stderr.trim() : ''
+
+  return stderr || stdout || error.message || fallback
+}
+
+function parseGitBranchRecords(output: string): GitBranchRecord[] {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [headMarker, name] = line.split('\u0000')
+
+      return {
+        name: name?.trim() ?? '',
+        current: headMarker === '*',
+      }
+    })
+    .filter((branch): branch is GitBranchRecord => branch.name.length > 0)
+    .sort((left, right) => {
+      if (left.current !== right.current) {
+        return left.current ? -1 : 1
+      }
+
+      return left.name.localeCompare(right.name)
+    })
+}
+
+function parsePendingPushCommits(output: string): GitPendingPushCommitRecord[] {
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [hash, shortHash, subject, authorName, committedAt] = line.split('\u0000')
+
+      return {
+        hash: hash?.trim() ?? '',
+        shortHash: shortHash?.trim() ?? '',
+        subject: subject?.trim() ?? '',
+        authorName: authorName?.trim() ?? '',
+        committedAt: committedAt?.trim() ?? '',
+      }
+    })
+    .filter((commit): commit is GitPendingPushCommitRecord => commit.hash.length > 0)
+}
+
+function getGitBranchSyncAction(ahead: number, behind: number): GitBranchSyncAction {
+  if (behind > 0) {
+    return 'pull'
+  }
+
+  if (ahead > 0) {
+    return 'push'
+  }
+
+  return 'none'
+}
+
+function parseGitBranchSyncState(output: string): GitBranchSyncState {
+  let upstream: string | null = null
+  let ahead = 0
+  let behind = 0
+
+  for (const line of output.split('\n')) {
+    if (line.startsWith('# branch.upstream ')) {
+      upstream = line.slice('# branch.upstream '.length).trim() || null
+      continue
+    }
+
+    if (!line.startsWith('# branch.ab ')) {
+      continue
+    }
+
+    const match = line.match(/^# branch\.ab \+(\d+) -(\d+)$/)
+    if (!match) {
+      continue
+    }
+
+    ahead = Number.parseInt(match[1] ?? '0', 10)
+    behind = Number.parseInt(match[2] ?? '0', 10)
+  }
+
+  return {
+    action: getGitBranchSyncAction(ahead, behind),
+    ahead,
+    behind,
+    hasUpstream: upstream !== null,
+    upstream,
+  }
+}
+
+async function refreshGitTrackingRefs(force = false) {
+  const now = Date.now()
+
+  if (!force && now - lastGitFetchAttemptAt < GIT_FETCH_THROTTLE_MS) {
+    return
+  }
+
+  if (gitFetchPromise) {
+    return gitFetchPromise
+  }
+
+  lastGitFetchAttemptAt = now
+  gitFetchPromise = runGitInServices(['fetch', '--quiet', '--prune'])
+    .then(() => undefined)
+    .finally(() => {
+      gitFetchPromise = null
+      lastGitFetchAttemptAt = Date.now()
+    })
+
+  return gitFetchPromise
+}
+
+async function getGitBranchSyncState(options?: { refreshRemote?: boolean }) {
+  try {
+    await refreshGitTrackingRefs(Boolean(options?.refreshRemote))
+  } catch {
+    // Fall back to the last known tracking refs when fetch fails.
+  }
+
+  const statusOutput = await runReadOnlyGitInServices(['status', '--porcelain=v2', '--branch'])
+  return parseGitBranchSyncState(statusOutput)
+}
+
+async function listLocalGitBranches() {
+  const output = await runReadOnlyGitInServices([
+    'for-each-ref',
+    '--format=%(HEAD)%00%(refname:short)',
+    'refs/heads',
+  ])
+
+  return parseGitBranchRecords(output)
+}
+
+async function switchGitBranch(branchName: string, options?: { create?: boolean }) {
+  const nextBranchName = branchName.trim()
+
+  if (!nextBranchName) {
+    throw new Error('Branch name is required.')
+  }
+
+  const existingBranches = await listLocalGitBranches()
+  const currentBranch = existingBranches.find((branch) => branch.current)?.name ?? null
+
+  if (!options?.create && currentBranch === nextBranchName) {
+    return { ok: true, branch: nextBranchName }
+  }
+
+  try {
+    await runGitInServices(['check-ref-format', '--branch', nextBranchName])
+  } catch (error) {
+    throw new Error(getCommandFailureMessage(error, 'Invalid branch name.'))
+  }
+
+  const commandArgs = options?.create
+    ? ['switch', '--quiet', '-c', nextBranchName]
+    : ['switch', '--quiet', nextBranchName]
+
+  try {
+    await runGitInServices(commandArgs)
+  } catch {
+    try {
+      const mergeArgs = options?.create
+        ? ['switch', '--quiet', '--merge', '-c', nextBranchName]
+        : ['switch', '--quiet', '--merge', nextBranchName]
+      await runGitInServices(mergeArgs)
+    } catch (mergeError) {
+      throw new Error(
+        getCommandFailureMessage(
+          mergeError,
+          options?.create
+            ? 'Could not create and switch branch.'
+            : 'Could not switch branch.',
+        ),
+      )
+    }
+  }
+
+  return { ok: true, branch: nextBranchName }
+}
+
+async function listPendingPushCommits() {
+  const syncState = await getGitBranchSyncState()
+
+  if (!syncState.hasUpstream || !syncState.upstream || syncState.ahead === 0) {
+    return []
+  }
+
+  const output = await runReadOnlyGitInServices([
+    'log',
+    '--format=%H%x00%h%x00%s%x00%an%x00%cI',
+    `${syncState.upstream}..HEAD`,
+  ])
+
+  return parsePendingPushCommits(output)
 }
 
 function getGitWorkingTreeStatus(
@@ -1131,12 +1406,188 @@ async function unstageWorkingTreeFile(filePath: string) {
   return { ok: true }
 }
 
+async function commitWorkingTree(message: string) {
+  const commitMessage = message.trim()
+
+  if (!commitMessage) {
+    throw new Error('Commit message is required.')
+  }
+
+  const tempFilePath = path.join(os.tmpdir(), `dev6-commit-${crypto.randomUUID()}.txt`)
+
+  try {
+    fs.writeFileSync(tempFilePath, commitMessage, 'utf-8')
+    await runGitInServices(['commit', '-F', tempFilePath])
+  } finally {
+    try {
+      fs.rmSync(tempFilePath, { force: true })
+    } catch {
+      // noop
+    }
+  }
+
+  return { ok: true }
+}
+
+function isGeneratedCommitMessage(value: unknown): value is GeneratedCommitMessage {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const record = value as Record<string, unknown>
+
+  return typeof record.subject === 'string' && typeof record.body === 'string'
+}
+
+function normalizeGeneratedCommitMessageField(value: string) {
+  return value
+    .replace(/\r\n/g, '\n')
+    .replace(/`+/g, '')
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .join('\n')
+    .trim()
+}
+
+function formatGeneratedCommitMessage(message: GeneratedCommitMessage) {
+  const subject = normalizeGeneratedCommitMessageField(message.subject).replace(/\s+/g, ' ')
+  const body = normalizeGeneratedCommitMessageField(message.body)
+
+  if (!subject) {
+    throw new Error('Claude returned an empty commit subject.')
+  }
+
+  return body ? `${subject}\n\n${body}` : subject
+}
+
+async function runPrimaryGitBranchAction() {
+  const syncState = await getGitBranchSyncState({ refreshRemote: true })
+
+  if (syncState.action === 'pull') {
+    try {
+      await runGitInServices(['pull', '--rebase=false', 'origin', '--prune'])
+    } catch (error) {
+      throw new Error(getCommandFailureMessage(error, 'Could not pull branch changes.'))
+    }
+
+    return { ok: true, action: 'pull' as const }
+  }
+
+  if (syncState.action === 'push') {
+    try {
+      await runGitInServices(['push'])
+    } catch (error) {
+      throw new Error(getCommandFailureMessage(error, 'Could not push branch changes.'))
+    }
+
+    return { ok: true, action: 'push' as const }
+  }
+
+  return { ok: true, action: 'none' as const }
+}
+
+async function generateCommitMessage() {
+  const servicesPath = getServicesPath()
+  const env = await getCommandEnv()
+  const stagedFiles = await runGitInServices(['diff', '--cached', '--name-only'])
+
+  if (!stagedFiles.trim()) {
+    throw new Error('There are no staged changes to summarize.')
+  }
+
+  const stagedDiff = await runGitInServices(['diff', '--cached', '--no-ext-diff', '--binary', '--unified=3'])
+  const prompt = [
+    'Generate a concise git commit message for the staged changes only.',
+    'Write the commit message in Spanish.',
+    'Respond using the provided JSON schema.',
+    'Do not include markdown, quotes, or backticks in either field.',
+    'Prefer a short subject line. Use an empty body unless extra context materially helps.',
+    '',
+    'Staged files:',
+    stagedFiles.trim(),
+    '',
+    'Staged diff:',
+    stagedDiff.trim(),
+  ].join('\n')
+
+  const stdout = await new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      'claude',
+      [
+        '--print',
+        '--output-format',
+        'json',
+        '--json-schema',
+        GENERATED_COMMIT_MESSAGE_JSON_SCHEMA,
+        '--settings',
+        '.claude/settings.json',
+        '--tools',
+        '',
+      ],
+      {
+        cwd: servicesPath,
+        env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      },
+    )
+
+    let output = ''
+    let errorOutput = ''
+
+    child.stdout.setEncoding('utf-8')
+    child.stderr.setEncoding('utf-8')
+
+    child.stdout.on('data', (chunk: string) => {
+      output += chunk
+    })
+
+    child.stderr.on('data', (chunk: string) => {
+      errorOutput += chunk
+    })
+
+    child.on('error', (error) => {
+      reject(error)
+    })
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve(output)
+        return
+      }
+
+      reject(new Error(errorOutput.trim() || `Claude exited with code ${code ?? 1}.`))
+    })
+
+    child.stdin.write(prompt)
+    child.stdin.end()
+  })
+
+  let parsedOutput: ClaudeStructuredOutputResult<unknown>
+
+  try {
+    parsedOutput = JSON.parse(stdout) as ClaudeStructuredOutputResult<unknown>
+  } catch {
+    throw new Error('Claude returned invalid JSON for the commit message.')
+  }
+
+  if (parsedOutput.is_error) {
+    throw new Error(parsedOutput.result?.trim() || 'Claude failed to generate the commit message.')
+  }
+
+  if (!isGeneratedCommitMessage(parsedOutput.structured_output)) {
+    throw new Error('Claude returned an invalid structured commit message.')
+  }
+
+  return { message: formatGeneratedCommitMessage(parsedOutput.structured_output) }
+}
+
 async function getWorkingTreeChanges(): Promise<GitWorkingTreeSnapshot> {
   const repositoryPath = getServicesPath()
-  const [branch, statusOutput, diffBaseRef] = await Promise.all([
+  const [branch, statusOutput, diffBaseRef, sync] = await Promise.all([
     getCurrentServicesBranch(),
     runGitInServices(['status', '--porcelain=v1', '-z', '--untracked-files=all']),
     getGitDiffBaseRef(),
+    getGitBranchSyncState(),
   ])
 
   const statusEntries = parseGitStatusEntries(statusOutput)
@@ -1195,6 +1646,7 @@ async function getWorkingTreeChanges(): Promise<GitWorkingTreeSnapshot> {
     repositoryPath,
     additions: totals.additions,
     deletions: totals.deletions,
+    sync,
     files,
   }
 }
@@ -1422,6 +1874,14 @@ app.whenReady().then(() => {
     return getCurrentServicesBranch()
   })
 
+  ipcMain.handle('git:list-local-branches', async () => {
+    return listLocalGitBranches()
+  })
+
+  ipcMain.handle('git:list-pending-push-commits', async () => {
+    return listPendingPushCommits()
+  })
+
   ipcMain.handle('git:get-working-tree-changes', async () => {
     return getWorkingTreeChanges()
   })
@@ -1434,8 +1894,28 @@ app.whenReady().then(() => {
     return unstageWorkingTreeFile(filePath)
   })
 
+  ipcMain.handle('git:commit-working-tree', async (_event, message: string) => {
+    return commitWorkingTree(message)
+  })
+
+  ipcMain.handle('git:generate-commit-message', async () => {
+    return generateCommitMessage()
+  })
+
   ipcMain.handle('git:discard-working-tree-file', async (_event, filePath: string) => {
     return discardWorkingTreeFile(filePath)
+  })
+
+  ipcMain.handle('git:run-primary-branch-action', async () => {
+    return runPrimaryGitBranchAction()
+  })
+
+  ipcMain.handle('git:switch-branch', async (_event, branchName: string) => {
+    return switchGitBranch(branchName)
+  })
+
+  ipcMain.handle('git:create-and-switch-branch', async (_event, branchName: string) => {
+    return switchGitBranch(branchName, { create: true })
   })
 
   // --- Services folder ---
