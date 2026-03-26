@@ -29,31 +29,6 @@ export default function TerminalsPage() {
 		}
 	}, [activeSession, isLoading, navigate, sessions, terminalId]);
 
-	useEffect(() => {
-		const handleKeyDown = (event: KeyboardEvent) => {
-			if (!event.metaKey || event.ctrlKey || event.altKey) {
-				return;
-			}
-
-			const digit = Number(event.key);
-			if (!Number.isInteger(digit) || digit < 1 || digit > 9) {
-				return;
-			}
-
-			const session = sessions[digit - 1];
-			if (!session) {
-				return;
-			}
-
-			event.preventDefault();
-			navigate(`/terminals/${session.id}`);
-		};
-
-		window.addEventListener("keydown", handleKeyDown, { capture: true });
-		return () =>
-			window.removeEventListener("keydown", handleKeyDown, { capture: true });
-	}, [navigate, sessions]);
-
 	return (
 		<div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2">
 			{!isLoading && sessions.length === 0 ? null : activeSession ? (

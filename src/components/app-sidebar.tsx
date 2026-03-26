@@ -18,9 +18,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
-
-const GIT_SUMMARY_REFRESH_MS = 5000
-const WORKING_TREE_CHANGED_EVENT = 'desktop:working-tree-changed'
+import { useGitStatus } from '@/hooks/use-git-status'
 
 function editorLabel(editor: 'zed' | 'vscode' | 'cursor') {
   switch (editor) {
@@ -47,6 +45,7 @@ function editorIconPath(editor: 'zed' | 'vscode' | 'cursor') {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const location = useLocation()
   const navigate = useNavigate()
+  const { snapshot } = useGitStatus()
   const [branchName, setBranchName] = React.useState('Dev6')
   const [gitSummary, setGitSummary] = React.useState({ additions: 0, deletions: 0 })
   const [isOpeningEditor, setIsOpeningEditor] = React.useState(false)
@@ -57,38 +56,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   React.useEffect(() => {
     let cancelled = false
 
-    async function refreshGitSummary() {
-      const snapshot = await window.desktop.getWorkingTreeChanges()
-
-      if (cancelled) return
-
-      if (snapshot.branch) {
-        setBranchName(snapshot.branch)
-      }
-
-      setGitSummary({
-        additions: snapshot.additions,
-        deletions: snapshot.deletions,
-      })
-    }
-
     async function loadSidebarState(nextEditor?: 'zed' | 'vscode' | 'cursor') {
-      const [snapshot, settings, editors] = await Promise.all([
-        window.desktop.getWorkingTreeChanges(),
+      const [settings, editors] = await Promise.all([
         window.desktop.getSettings(),
         window.desktop.getAvailableEditors(),
       ])
 
-      if (cancelled) return
-
-      if (snapshot.branch) {
-        setBranchName(snapshot.branch)
+      if (cancelled) {
+        return
       }
 
-      setGitSummary({
-        additions: snapshot.additions,
-        deletions: snapshot.deletions,
-      })
       setAvailableEditors(editors)
 
       const fallbackEditor = editors[0] ?? 'zed'
@@ -101,9 +78,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
 
     void loadSidebarState()
-    const intervalId = window.setInterval(() => {
-      void refreshGitSummary()
-    }, GIT_SUMMARY_REFRESH_MS)
 
     const handleSettingsChanged = (event: Event) => {
       const detail = (event as CustomEvent<Partial<AppSettings>>).detail
@@ -113,20 +87,28 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       }
     }
 
-    const handleWorkingTreeChanged = () => {
-      void refreshGitSummary()
-    }
-
     window.addEventListener('desktop:settings-changed', handleSettingsChanged)
-    window.addEventListener(WORKING_TREE_CHANGED_EVENT, handleWorkingTreeChanged)
 
     return () => {
       cancelled = true
-      window.clearInterval(intervalId)
       window.removeEventListener('desktop:settings-changed', handleSettingsChanged)
-      window.removeEventListener(WORKING_TREE_CHANGED_EVENT, handleWorkingTreeChanged)
     }
   }, [])
+
+  React.useEffect(() => {
+    if (!snapshot) {
+      return
+    }
+
+    if (snapshot.branch) {
+      setBranchName(snapshot.branch)
+    }
+
+    setGitSummary({
+      additions: snapshot.additions,
+      deletions: snapshot.deletions,
+    })
+  }, [snapshot])
 
   async function handleOpenEditor() {
     try {

@@ -26,10 +26,10 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
+import { useGitStatus } from "@/hooks/use-git-status";
+import { WORKING_TREE_CHANGED_EVENT } from "@/lib/git-status-context";
 import { cn } from "@/lib/utils";
 
-const REFRESH_INTERVAL_MS = 5000;
-const WORKING_TREE_CHANGED_EVENT = "desktop:working-tree-changed";
 type FileActionKind = "stage" | "unstage" | "discard";
 
 function notifyWorkingTreeChanged() {
@@ -423,7 +423,14 @@ function FileListItem({
 }
 
 export default function BranchPage() {
-	const [snapshot, setSnapshot] = useState<GitWorkingTreeSnapshot | null>(null);
+	const {
+		snapshot: cachedSnapshot,
+		isLoading: isGitStatusLoading,
+		refreshSnapshot,
+	} = useGitStatus();
+	const [snapshot, setSnapshot] = useState<GitWorkingTreeSnapshot | null>(
+		cachedSnapshot,
+	);
 	const [branches, setBranches] = useState<GitBranchRecord[]>([]);
 	const [pendingPushCommits, setPendingPushCommits] = useState<
 		GitPendingPushCommit[]
@@ -440,7 +447,9 @@ export default function BranchPage() {
 	} | null>(null);
 	const [isBranchSwitcherOpen, setIsBranchSwitcherOpen] = useState(false);
 	const [isPendingPushCommitsOpen, setIsPendingPushCommitsOpen] = useState(false);
-	const [isLoading, setIsLoading] = useState(true);
+	const [isLoading, setIsLoading] = useState(
+		cachedSnapshot === null && isGitStatusLoading,
+	);
 	const [isLoadingBranches, setIsLoadingBranches] = useState(false);
 	const [isLoadingPendingPushCommits, setIsLoadingPendingPushCommits] =
 		useState(false);
@@ -476,7 +485,7 @@ export default function BranchPage() {
 		}
 
 	try {
-			const nextSnapshot = await window.desktop.getWorkingTreeChanges();
+			const nextSnapshot = await refreshSnapshot();
 			const nextPendingOptimisticStageActions = new Map(
 				pendingOptimisticStageActionsRef.current,
 			);
@@ -787,21 +796,21 @@ export default function BranchPage() {
 	}
 
 	useEffect(() => {
-		let cancelled = false;
+		if (cachedSnapshot) {
+			setSnapshot(
+				applyPendingOptimisticStageActions(
+					cachedSnapshot,
+					pendingOptimisticStageActionsRef.current,
+				),
+			);
+			setIsLoading(false);
+			return;
+		}
 
-		void loadChanges("initial");
-
-		const intervalId = window.setInterval(() => {
-			if (!cancelled) {
-				void loadChanges("refresh");
-			}
-		}, REFRESH_INTERVAL_MS);
-
-		return () => {
-			cancelled = true;
-			window.clearInterval(intervalId);
-		};
-	}, []);
+		if (!isGitStatusLoading) {
+			void loadChanges("initial");
+		}
+	}, [cachedSnapshot, isGitStatusLoading]);
 
 	useEffect(() => {
 		setPendingDiscardPath(null);
