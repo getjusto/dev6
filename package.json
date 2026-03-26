@@ -1,7 +1,7 @@
 {
   "name": "dev6",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Private macOS Electron app scaffold for dev6.",
   "main": "dist-electron/main.cjs",
   "type": "module",
