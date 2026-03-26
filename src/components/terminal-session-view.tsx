@@ -29,10 +29,16 @@ export function TerminalSessionView({
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const terminalRef = useRef<Terminal | null>(null)
   const appKindRef = useRef(appKind)
+  const activeRef = useRef(active)
+  const syncSizeRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
     appKindRef.current = appKind
   }, [appKind])
+
+  useEffect(() => {
+    activeRef.current = active
+  }, [active])
 
   useEffect(() => {
     const viewport = viewportRef.current
@@ -57,6 +63,39 @@ export function TerminalSessionView({
     let disposed = false
     let hasHydrated = false
     let lastSequence = 0
+    const readClipboardText = async () => {
+      if (typeof window.desktop.readClipboardText === 'function') {
+        return window.desktop.readClipboardText()
+      }
+
+      return navigator.clipboard.readText()
+    }
+
+    const writeClipboardText = async (text: string) => {
+      if (typeof window.desktop.writeClipboardText === 'function') {
+        window.desktop.writeClipboardText(text)
+        return
+      }
+
+      await navigator.clipboard.writeText(text)
+    }
+
+    const pasteFromClipboard = () => {
+      if (appKindRef.current === 'claude') {
+        window.desktop.writeTerminalSession(sessionId, '\u0016')
+        return
+      }
+
+      void readClipboardText()
+        .then((text) => {
+          if (text) {
+            window.desktop.writeTerminalSession(sessionId, text)
+          }
+        })
+        .catch(() => {
+          // Ignore clipboard access failures.
+        })
+    }
 
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') {
@@ -104,9 +143,17 @@ export function TerminalSessionView({
         const selection = terminal.getSelection()
         if (selection) {
           event.preventDefault()
-          void navigator.clipboard.writeText(selection)
+          void writeClipboardText(selection).catch(() => {
+            // Ignore clipboard access failures.
+          })
           return false
         }
+      }
+
+      if (event.metaKey && !event.ctrlKey && !event.altKey && key === 'v') {
+        event.preventDefault()
+        pasteFromClipboard()
+        return false
       }
 
       return true
@@ -118,7 +165,7 @@ export function TerminalSessionView({
     const handlePaste = (event: ClipboardEvent) => {
       const sessionAppKind = appKindRef.current
 
-      if (sessionAppKind === 'codex' || sessionAppKind === 'claude') {
+      if (sessionAppKind === 'claude') {
         event.preventDefault()
         window.desktop.writeTerminalSession(sessionId, '\u0016')
         return
@@ -135,18 +182,85 @@ export function TerminalSessionView({
 
     viewport.addEventListener('paste', handlePaste)
 
+    const handleWindowKeyDown = (event: KeyboardEvent) => {
+      if (!active || event.defaultPrevented) {
+        return
+      }
+
+      if (!event.metaKey || event.ctrlKey || event.altKey || event.key.toLowerCase() !== 'v') {
+        return
+      }
+
+      const eventTarget = event.target
+      if (!(eventTarget instanceof Node) || !viewport.contains(eventTarget)) {
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      pasteFromClipboard()
+    }
+
+    window.addEventListener('keydown', handleWindowKeyDown, { capture: true })
+
+    const unsubscribeCommandPaste =
+      typeof window.desktop.onCommandPaste === 'function'
+        ? window.desktop.onCommandPaste(() => {
+            if (!activeRef.current) {
+              return
+            }
+
+            const activeElement = document.activeElement
+            if (activeElement instanceof Node && viewport.contains(activeElement)) {
+              pasteFromClipboard()
+            }
+          })
+        : () => {}
+
+    const hasVisibleViewportSize = () => {
+      const { width, height } = viewport.getBoundingClientRect()
+      return width > 0 && height > 0
+    }
+
     const syncSize = () => {
-      requestAnimationFrame(() => {
+      if (disposed || !hasVisibleViewportSize()) {
+        return false
+      }
+
+      fitAddon.fit()
+
+      if (terminal.cols > 0 && terminal.rows > 0) {
+        window.desktop.resizeTerminalSession(sessionId, terminal.cols, terminal.rows)
+      }
+
+      return true
+    }
+
+    const scheduleSyncSize = (attempts = 1) => {
+      let remainingAttempts = attempts
+
+      const run = () => {
         if (disposed) {
           return
         }
 
-        fitAddon.fit()
+        const didSync = syncSize()
+        remainingAttempts -= 1
 
-        if (terminal.cols > 0 && terminal.rows > 0) {
-          window.desktop.resizeTerminalSession(sessionId, terminal.cols, terminal.rows)
+        if (!didSync && remainingAttempts > 0) {
+          window.setTimeout(run, 16)
+          return
         }
-      })
+
+        if (didSync && remainingAttempts > 0) {
+          window.setTimeout(run, 32)
+        }
+      }
+
+      requestAnimationFrame(run)
+    }
+    syncSizeRef.current = () => {
+      scheduleSyncSize(6)
     }
 
     const applyEvent = (event: TerminalSessionDataEvent) => {
@@ -186,7 +300,7 @@ export function TerminalSessionView({
     })
 
     const resizeObserver = new ResizeObserver(() => {
-      syncSize()
+      scheduleSyncSize(2)
     })
     resizeObserver.observe(viewport)
 
@@ -214,7 +328,7 @@ export function TerminalSessionView({
           .sort((left, right) => left.sequence - right.sequence)
           .forEach(applyEvent)
 
-        syncSize()
+        scheduleSyncSize(6)
       })
       .catch(() => {
         if (!disposed) {
@@ -225,7 +339,10 @@ export function TerminalSessionView({
     return () => {
       disposed = true
       terminalRef.current = null
+      syncSizeRef.current = null
       viewport.removeEventListener('paste', handlePaste)
+      window.removeEventListener('keydown', handleWindowKeyDown, { capture: true })
+      unsubscribeCommandPaste()
       resizeObserver.disconnect()
       themeObserver.disconnect()
       terminalDataDisposable.dispose()
@@ -238,6 +355,10 @@ export function TerminalSessionView({
 
   useEffect(() => {
     if (active) {
+      syncSizeRef.current?.()
+      requestAnimationFrame(() => {
+        syncSizeRef.current?.()
+      })
       terminalRef.current?.scrollToBottom()
       terminalRef.current?.focus()
     }

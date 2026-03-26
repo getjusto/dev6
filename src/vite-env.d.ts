@@ -158,6 +158,7 @@ declare global {
 		listTerminalSessions: () => Promise<TerminalSessionSummary[]>;
 		createTerminalSession: (options?: {
 			cwd?: string;
+			backgroundAppearance?: "dark" | "light";
 		}) => Promise<TerminalSessionSummary>;
 		closeTerminalSession: (sessionId: string) => Promise<{ ok: boolean }>;
 		getTerminalSessionSnapshot: (
@@ -169,6 +170,9 @@ declare global {
 			cols: number,
 			rows: number,
 		) => void;
+		readClipboardText: () => string;
+		writeClipboardText: (text: string) => void;
+		onCommandPaste: (callback: () => void) => () => void;
 		onTerminalSessionData: (
 			callback: (payload: TerminalSessionDataEvent) => void,
 		) => () => void;

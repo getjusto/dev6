@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { clipboard, contextBridge, ipcRenderer } from 'electron'
 
 type UpdateStatusPayload = {
   status: string
@@ -66,13 +66,27 @@ contextBridge.exposeInMainWorld('desktop', {
   createAndSwitchBranch: (branchName: string) =>
     ipcRenderer.invoke('git:create-and-switch-branch', branchName),
   listTerminalSessions: () => ipcRenderer.invoke('terminals:list'),
-  createTerminalSession: (options?: { cwd?: string }) => ipcRenderer.invoke('terminals:create', options),
+  createTerminalSession: (options?: { cwd?: string; backgroundAppearance?: 'dark' | 'light' }) =>
+    ipcRenderer.invoke('terminals:create', options),
   closeTerminalSession: (sessionId: string) => ipcRenderer.invoke('terminals:close', sessionId),
   getTerminalSessionSnapshot: (sessionId: string) => ipcRenderer.invoke('terminals:snapshot', sessionId),
   writeTerminalSession: (sessionId: string, data: string) =>
     ipcRenderer.send('terminals:write', sessionId, data),
   resizeTerminalSession: (sessionId: string, cols: number, rows: number) =>
     ipcRenderer.send('terminals:resize', sessionId, cols, rows),
+  readClipboardText: () => clipboard.readText(),
+  writeClipboardText: (text: string) => clipboard.writeText(text),
+  onCommandPaste: (callback: () => void) => {
+    const listener = () => {
+      callback()
+    }
+
+    ipcRenderer.on('app:command-paste', listener)
+
+    return () => {
+      ipcRenderer.removeListener('app:command-paste', listener)
+    }
+  },
   onTerminalSessionData: (
     callback: (payload: { sessionId: string; sequence: number; data: string }) => void,
   ) => {

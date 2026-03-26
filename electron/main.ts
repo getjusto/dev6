@@ -751,11 +751,15 @@ function disposeAllTerminalSessions() {
   stopTerminalCwdWatcher()
 }
 
-async function createTerminalSession(initialCwd?: string) {
+async function createTerminalSession(
+  initialCwd?: string,
+  backgroundAppearance: 'dark' | 'light' = 'dark',
+) {
   const env = await getCommandEnv()
   const shellPath = env.SHELL || '/bin/zsh'
   const cwd = resolveTerminalCwd(initialCwd)
   const sessionId = `term_${crypto.randomUUID()}`
+  const colorFgBg = backgroundAppearance === 'dark' ? '15;0' : '0;15'
   const ptyProcess = pty.spawn(shellPath, getShellLaunchArgs(shellPath), {
     name: 'xterm-256color',
     cols: 80,
@@ -765,8 +769,10 @@ async function createTerminalSession(initialCwd?: string) {
       ...env,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
+      COLORFGBG: colorFgBg,
       TERM_PROGRAM: 'dev6',
       TERM_PROGRAM_VERSION: app.getVersion(),
+      TERM_PROGRAM_BACKGROUND: backgroundAppearance,
     },
   })
 
@@ -1690,6 +1696,19 @@ function createMainWindow() {
     return { action: 'deny' }
   })
 
+  window.webContents.on('before-input-event', (event, input) => {
+    if (
+      input.type === 'keyDown' &&
+      input.meta &&
+      !input.control &&
+      !input.alt &&
+      input.key.toLowerCase() === 'v'
+    ) {
+      event.preventDefault()
+      window.webContents.send('app:command-paste')
+    }
+  })
+
   if (process.env.VITE_DEV_SERVER_URL) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL)
     window.webContents.openDevTools({ mode: 'detach' })
@@ -1822,9 +1841,12 @@ app.whenReady().then(() => {
     return listTerminalSessions()
   })
 
-  ipcMain.handle('terminals:create', async (_event, options?: { cwd?: string }) => {
-    return createTerminalSession(options?.cwd)
-  })
+  ipcMain.handle(
+    'terminals:create',
+    async (_event, options?: { cwd?: string; backgroundAppearance?: 'dark' | 'light' }) => {
+      return createTerminalSession(options?.cwd, options?.backgroundAppearance ?? 'dark')
+    },
+  )
 
   ipcMain.handle('terminals:close', async (_event, sessionId: string) => {
     closeTerminalSession(sessionId)

@@ -5,6 +5,10 @@ import {
   type CreateTerminalSessionOptions,
 } from '@/lib/terminal-sessions-context'
 
+function getResolvedBackgroundAppearance(): 'dark' | 'light' {
+  return document.documentElement.classList.contains('dark') ? 'dark' : 'light'
+}
+
 export function TerminalSessionsProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<TerminalSessionSummary[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -16,7 +20,10 @@ export function TerminalSessionsProvider({ children }: { children: ReactNode }) 
   }
 
   async function createSession(options?: CreateTerminalSessionOptions) {
-    return window.desktop.createTerminalSession(options)
+    return window.desktop.createTerminalSession({
+      ...options,
+      backgroundAppearance: getResolvedBackgroundAppearance(),
+    })
   }
 
   async function closeSession(sessionId: string) {

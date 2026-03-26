@@ -147,7 +147,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }
 
   async function handleCreateTerminal() {
-    const session = await window.desktop.createTerminalSession()
+    const session = await window.desktop.createTerminalSession({
+      backgroundAppearance: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
+    })
     navigate(`/terminals/${session.id}`)
   }
 

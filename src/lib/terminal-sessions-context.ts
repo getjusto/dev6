@@ -2,6 +2,7 @@ import { createContext } from 'react'
 
 export type CreateTerminalSessionOptions = {
   cwd?: string
+  backgroundAppearance?: 'dark' | 'light'
 }
 
 export type TerminalSessionsContextValue = {
