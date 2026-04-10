@@ -959,11 +959,12 @@ function enqueueServicesRepoCommand<T>(run: () => Promise<T>) {
 
 async function execGitInServices(
   args: string[],
-  options?: { encoding?: BufferEncoding },
+  options?: { encoding?: BufferEncoding; noOptionalLocks?: boolean },
 ): Promise<string> {
   const servicesPath = getServicesPath()
   const env = await getCommandEnv()
-  const { stdout } = await execFileAsync('git', args, {
+  const gitArgs = options?.noOptionalLocks ? ['--no-optional-locks', ...args] : args
+  const { stdout } = await execFileAsync('git', gitArgs, {
     cwd: servicesPath,
     env,
     encoding: options?.encoding ?? 'utf-8',
@@ -977,7 +978,7 @@ async function execGitInServices(
 
 async function runGitInServices(
   args: string[],
-  options?: { encoding?: BufferEncoding },
+  options?: { encoding?: BufferEncoding; noOptionalLocks?: boolean },
 ): Promise<string> {
   return enqueueServicesRepoCommand(() => execGitInServices(args, options))
 }
@@ -986,7 +987,9 @@ async function runReadOnlyGitInServices(
   args: string[],
   options?: { encoding?: BufferEncoding },
 ): Promise<string> {
-  return enqueueServicesRepoCommand(() => execGitInServices(args, options))
+  return enqueueServicesRepoCommand(() =>
+    execGitInServices(args, { ...options, noOptionalLocks: true }),
+  )
 }
 
 function getCommandFailureMessage(error: unknown, fallback: string) {
