@@ -105,7 +105,7 @@ const terminalAppIconCache = new Map<TerminalSessionAppKind, string | null>()
 let terminalLabelCounter = 0
 let terminalCwdInterval: NodeJS.Timeout | null = null
 let gitFetchPromise: Promise<void> | null = null
-let gitServicesQueue: Promise<void> = Promise.resolve()
+let servicesRepoQueue: Promise<void> = Promise.resolve()
 let lastGitFetchAttemptAt = 0
 const EDITOR_APP_BUNDLES = {
   zed: 'Zed.app',
@@ -880,15 +880,17 @@ function resizeTerminalSession(sessionId: string, cols: number, rows: number) {
 }
 
 async function callDev5(...args: string[]): Promise<unknown> {
-  const servicesPath = getServicesPath()
-  const env = await getCommandEnv()
-  const { stdout } = await execFileAsync('yarn', ['--silent', 'dev5', ...args, '--json'], {
-    cwd: servicesPath,
-    encoding: 'utf-8',
-    env,
-    maxBuffer: 10 * 1024 * 1024,
+  return enqueueServicesRepoCommand(async () => {
+    const servicesPath = getServicesPath()
+    const env = await getCommandEnv()
+    const { stdout } = await execFileAsync('yarn', ['--silent', 'dev5', ...args, '--json'], {
+      cwd: servicesPath,
+      encoding: 'utf-8',
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+    })
+    return JSON.parse(stdout)
   })
-  return JSON.parse(stdout)
 }
 
 async function readDev5Logs(serviceName: string, lineCount: number): Promise<string> {
@@ -899,15 +901,13 @@ async function readDev5Logs(serviceName: string, lineCount: number): Promise<str
 
   const servicesPath = getServicesPath()
   const env = await getCommandEnv()
-  const { stdout } = await execFileAsync(
-    'yarn',
-    ['--silent', 'dev5', 'logs', serviceName, '-n', String(lineCount)],
-    {
+  const { stdout } = await enqueueServicesRepoCommand(() =>
+    execFileAsync('yarn', ['--silent', 'dev5', 'logs', serviceName, '-n', String(lineCount)], {
       cwd: servicesPath,
       encoding: 'utf-8',
       env,
       maxBuffer: 10 * 1024 * 1024,
-    },
+    }),
   )
 
   return stdout
@@ -947,9 +947,9 @@ async function getCurrentServicesBranch(): Promise<string | null> {
   }
 }
 
-function enqueueGitServicesCommand<T>(run: () => Promise<T>) {
-  const nextRun = gitServicesQueue.then(run, run)
-  gitServicesQueue = nextRun.then(
+function enqueueServicesRepoCommand<T>(run: () => Promise<T>) {
+  const nextRun = servicesRepoQueue.then(run, run)
+  servicesRepoQueue = nextRun.then(
     () => undefined,
     () => undefined,
   )
@@ -979,14 +979,14 @@ async function runGitInServices(
   args: string[],
   options?: { encoding?: BufferEncoding },
 ): Promise<string> {
-  return enqueueGitServicesCommand(() => execGitInServices(args, options))
+  return enqueueServicesRepoCommand(() => execGitInServices(args, options))
 }
 
 async function runReadOnlyGitInServices(
   args: string[],
   options?: { encoding?: BufferEncoding },
 ): Promise<string> {
-  return execGitInServices(args, options)
+  return enqueueServicesRepoCommand(() => execGitInServices(args, options))
 }
 
 function getCommandFailureMessage(error: unknown, fallback: string) {
