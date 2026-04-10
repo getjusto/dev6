@@ -290,7 +290,8 @@ function DiffViewer({ diff }: { diff: string }) {
 
 function FileListItem({
 	file,
-	isActive,
+	isSelected,
+	isFocused,
 	activeAction,
 	isPendingDiscard,
 	onSelect,
@@ -298,10 +299,11 @@ function FileListItem({
 	onDiscard,
 }: {
 	file: GitWorkingTreeFile;
-	isActive: boolean;
+	isSelected: boolean;
+	isFocused: boolean;
 	activeAction: FileActionKind | null;
 	isPendingDiscard: boolean;
-	onSelect: (path: string) => void;
+	onSelect: (path: string, event: React.MouseEvent) => void;
 	onStage: (file: GitWorkingTreeFile) => void;
 	onDiscard: (file: GitWorkingTreeFile) => void;
 }) {
@@ -310,7 +312,6 @@ function FileListItem({
 	const directory = parts.slice(0, -1).join("/");
 	const isStaged = isFileStaged(file);
 	const stageActionKind = getStageActionKind(file);
-	const fileNameLabel = truncateFromStart(fileName, 34);
 	const directoryLabel = truncateFromStart(directory || ".", 40);
 	const changeBadge = getChangeBadgeConfig(file.status);
 
@@ -319,67 +320,72 @@ function FileListItem({
 			<ContextMenuTrigger asChild>
 				<button
 					type="button"
-					onClick={() => onSelect(file.path)}
-					onContextMenu={() => onSelect(file.path)}
+					onClick={(event) => onSelect(file.path, event)}
+					onContextMenu={(event) => {
+						if (!isSelected) {
+							onSelect(file.path, event);
+						}
+					}}
 					className={cn(
-						"flex w-full flex-col gap-0 border-b px-4 py-2 text-left transition-colors last:border-b-0",
-						isActive ? "bg-accent text-accent-foreground" : "hover:bg-muted/60",
+						"group flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left",
+						isFocused
+							? "bg-accent text-accent-foreground"
+							: isSelected
+								? "bg-muted/80"
+								: "hover:bg-muted/60",
 					)}
 				>
+					<button
+						type="button"
+						onClick={(event) => {
+							event.stopPropagation();
+							onStage(file);
+						}}
+						className={cn(
+							"flex size-5 shrink-0 items-center justify-center rounded font-mono text-[10px] font-semibold",
+							isStaged
+								? "bg-emerald-500/15 text-emerald-600 ring-1 ring-emerald-500/25 dark:text-emerald-400"
+								: changeBadge.className,
+							activeAction !== null && "cursor-not-allowed opacity-60",
+						)}
+						title={isStaged ? "Unstage file" : "Stage file"}
+						disabled={activeAction !== null}
+					>
+						{isStaged ? (
+							<Check className="size-3 shrink-0" />
+						) : (
+							changeBadge.label
+						)}
+					</button>
 					<div className="min-w-0 flex-1">
-						<div className="flex items-start justify-between gap-2">
+						<div className="flex items-baseline gap-2">
 							<span
-								className="truncate text-[13px] font-medium"
+								className="truncate text-[12.5px] font-medium leading-5"
 								title={fileName}
 							>
-								{fileNameLabel}
+								{fileName}
 							</span>
-							<div className="flex min-w-6 shrink-0 flex-col items-end text-[11px] text-muted-foreground">
-								<span className="block h-3" />
-								{isStaged ? (
-									<button
-										type="button"
-										onClick={(event) => {
-											event.stopPropagation();
-											onStage(file);
-										}}
-										className={cn(
-											"relative flex size-5 items-center justify-center rounded-md font-mono text-[10px] font-semibold transition-opacity",
-											"bg-green-400/20 text-green-700 ring-1 ring-green-400/30 dark:text-green-300",
-											activeAction !== null && "cursor-not-allowed opacity-60",
-										)}
-										title="Unstage file"
-										disabled={activeAction !== null}
-									>
-										<Check className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
-									</button>
-								) : (
-									<button
-										type="button"
-										onClick={(event) => {
-											event.stopPropagation();
-											onStage(file);
-										}}
-										className={cn(
-											"relative flex size-5 items-center justify-center rounded-md font-mono text-[10px] font-semibold transition-opacity",
-											changeBadge.className,
-											activeAction !== null && "cursor-not-allowed opacity-60",
-										)}
-										title="Stage file"
-										disabled={activeAction !== null}
-									>
-										{changeBadge.label}
-									</button>
-								)}
-							</div>
+							{(file.additions > 0 || file.deletions > 0) ? (
+								<span className="shrink-0 font-mono text-[10px] leading-5 text-muted-foreground tabular-nums">
+									{file.additions > 0 ? (
+										<span className="text-emerald-600 dark:text-emerald-400">
+											+{file.additions}
+										</span>
+									) : null}
+									{file.additions > 0 && file.deletions > 0 ? " " : null}
+									{file.deletions > 0 ? (
+										<span className="text-rose-600 dark:text-rose-400">
+											-{file.deletions}
+										</span>
+									) : null}
+								</span>
+							) : null}
 						</div>
-						<div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-							<span className="truncate" title={directory || "."}>
-								{directoryLabel}
-							</span>
+						<div className="truncate text-[11px] leading-4 text-muted-foreground" title={directory || "."}>
+							{directoryLabel}
 						</div>
 						{file.previousPath ? (
-							<div className="truncate text-[11px] text-muted-foreground">
+							<div className="truncate text-[10px] leading-4 text-muted-foreground/70">
 								from {file.previousPath}
 							</div>
 						) : null}
@@ -435,7 +441,9 @@ export default function BranchPage() {
 	const [pendingPushCommits, setPendingPushCommits] = useState<
 		GitPendingPushCommit[]
 	>([]);
-	const [selectedPath, setSelectedPath] = useState<string | null>(null);
+	const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+	const [focusedPath, setFocusedPath] = useState<string | null>(null);
+	const lastClickedIndexRef = useRef<number | null>(null);
 	const [commitMessage, setCommitMessage] = useState("");
 	const [gitOperationError, setGitOperationError] = useState<{
 		title: string;
@@ -615,13 +623,13 @@ export default function BranchPage() {
 	}
 
 	async function handleOpenSelectedFile() {
-		if (!selectedFile || isOpeningFileInEditor) {
+		if (!focusedFile || isOpeningFileInEditor) {
 			return;
 		}
 
 		try {
 			setIsOpeningFileInEditor(true);
-			await window.desktop.openServicesFileInEditor(selectedFile.path);
+			await window.desktop.openServicesFileInEditor(focusedFile.path);
 		} catch (openError) {
 			setError(
 				openError instanceof Error
@@ -732,7 +740,8 @@ export default function BranchPage() {
 			setGitOperationError(null);
 			await window.desktop.switchBranch(branchName);
 			setPendingDiscardPath(null);
-			setSelectedPath(null);
+			setSelectedPaths(new Set());
+			setFocusedPath(null);
 			await Promise.all([loadChanges("refresh"), loadBranches()]);
 			setIsBranchSwitcherOpen(false);
 		} catch (switchError) {
@@ -758,7 +767,8 @@ export default function BranchPage() {
 			setGitOperationError(null);
 			await window.desktop.createAndSwitchBranch(branchName);
 			setPendingDiscardPath(null);
-			setSelectedPath(null);
+			setSelectedPaths(new Set());
+			setFocusedPath(null);
 			await Promise.all([loadChanges("refresh"), loadBranches()]);
 			setIsBranchSwitcherOpen(false);
 		} catch (createError) {
@@ -814,7 +824,7 @@ export default function BranchPage() {
 
 	useEffect(() => {
 		setPendingDiscardPath(null);
-	}, [selectedPath]);
+	}, [focusedPath]);
 
 	useEffect(() => {
 		if (!snapshot) {
@@ -822,24 +832,36 @@ export default function BranchPage() {
 		}
 
 		if (snapshot.files.length === 0) {
-			if (selectedPath !== null) {
-				setSelectedPath(null);
+			if (focusedPath !== null) {
+				setFocusedPath(null);
+				setSelectedPaths(new Set());
 			}
 			return;
 		}
 
-		const hasSelectedFile = selectedPath
-			? snapshot.files.some((file) => file.path === selectedPath)
-			: false;
+		const validPaths = new Set(snapshot.files.map((file) => file.path));
+		const nextSelected = new Set(
+			[...selectedPaths].filter((path) => validPaths.has(path)),
+		);
 
-		if (!hasSelectedFile) {
-			setSelectedPath(snapshot.files[0].path);
+		const hasFocused = focusedPath ? validPaths.has(focusedPath) : false;
+
+		if (!hasFocused) {
+			const fallback = snapshot.files[0].path;
+			setFocusedPath(fallback);
+			if (nextSelected.size === 0) {
+				nextSelected.add(fallback);
+			}
 		}
-	}, [selectedPath, snapshot]);
 
-	const selectedFile = snapshot
-		? selectedPath
-			? (snapshot.files.find((file) => file.path === selectedPath) ?? null)
+		if (nextSelected.size !== selectedPaths.size) {
+			setSelectedPaths(nextSelected);
+		}
+	}, [focusedPath, selectedPaths, snapshot]);
+
+	const focusedFile = snapshot
+		? focusedPath
+			? (snapshot.files.find((file) => file.path === focusedPath) ?? null)
 			: (snapshot.files[0] ?? null)
 		: null;
 	const fileGroups = snapshot
@@ -883,6 +905,7 @@ export default function BranchPage() {
 				return left.label.localeCompare(right.label);
 			})
 		: [];
+	const flatFileList = fileGroups.flatMap((group) => group.files);
 	const stagedFilesCount =
 		snapshot?.files.filter((file) => isFileStaged(file)).length ?? 0;
 	const branchSync = snapshot?.sync ?? {
@@ -896,6 +919,75 @@ export default function BranchPage() {
 	const isCommitComposerBusy = isCommitting || isGeneratingCommitMessage;
 	const canSubmitCommitComposer =
 		stagedFilesCount > 0 && !isCommitComposerBusy;
+	const selectedFiles = flatFileList.filter((file) =>
+		selectedPaths.has(file.path),
+	);
+
+	function handleFileSelect(path: string, event: React.MouseEvent) {
+		const index = flatFileList.findIndex((file) => file.path === path);
+
+		if (event.metaKey) {
+			// Cmd+click: toggle individual file
+			setSelectedPaths((prev) => {
+				const next = new Set(prev);
+				if (next.has(path)) {
+					next.delete(path);
+					// If we deselected the focused file, move focus to another selected file
+					if (focusedPath === path) {
+						const remaining = [...next];
+						setFocusedPath(remaining.length > 0 ? remaining[remaining.length - 1] : null);
+					}
+				} else {
+					next.add(path);
+					setFocusedPath(path);
+				}
+				return next;
+			});
+			lastClickedIndexRef.current = index;
+		} else if (event.shiftKey && lastClickedIndexRef.current !== null) {
+			// Shift+click: range select
+			const anchor = lastClickedIndexRef.current;
+			const start = Math.min(anchor, index);
+			const end = Math.max(anchor, index);
+			const rangePaths = flatFileList
+				.slice(start, end + 1)
+				.map((file) => file.path);
+			setSelectedPaths((prev) => {
+				const next = new Set(prev);
+				for (const rangePath of rangePaths) {
+					next.add(rangePath);
+				}
+				return next;
+			});
+			setFocusedPath(path);
+		} else {
+			// Plain click: single select
+			setSelectedPaths(new Set([path]));
+			setFocusedPath(path);
+			lastClickedIndexRef.current = index;
+		}
+		setPendingDiscardPath(null);
+	}
+
+	async function handleBulkStage() {
+		if (activeFileAction !== null || selectedFiles.length === 0) {
+			return;
+		}
+
+		for (const file of selectedFiles) {
+			await handleStageFile(file);
+		}
+	}
+
+	async function handleBulkDiscard() {
+		if (activeFileAction !== null || selectedFiles.length === 0) {
+			return;
+		}
+
+		for (const file of selectedFiles) {
+			await handleDiscardFile(file);
+		}
+	}
 
 	return (
 		<>
@@ -953,12 +1045,12 @@ export default function BranchPage() {
 							</div>
 						) : snapshot && snapshot.files.length > 0 ? (
 							<ScrollArea className="min-h-0 flex-1">
-								<div>
+								<div className="flex flex-col gap-1 p-2">
 									{fileGroups.map((group) => (
 										<div key={group.key}>
-											<div className="flex items-center justify-between border-t border-b px-4 py-2 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
+											<div className="flex items-center justify-between px-2.5 pt-2 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground">
 												<span className="truncate">{group.label}</span>
-												<span className="shrink-0 text-[10px]">
+												<span className="shrink-0 tabular-nums">
 													{group.files.length}
 												</span>
 											</div>
@@ -966,14 +1058,15 @@ export default function BranchPage() {
 												<FileListItem
 													key={file.path}
 													file={file}
-													isActive={selectedFile?.path === file.path}
+													isSelected={selectedPaths.has(file.path)}
+													isFocused={focusedFile?.path === file.path}
 													activeAction={
 														activeFileAction?.path === file.path
 															? activeFileAction.kind
 															: null
 													}
 													isPendingDiscard={pendingDiscardPath === file.path}
-													onSelect={setSelectedPath}
+													onSelect={handleFileSelect}
 													onStage={handleStageFile}
 													onDiscard={handleDiscardFile}
 												/>
@@ -1044,55 +1137,65 @@ export default function BranchPage() {
 									<button
 										type="button"
 										className="truncate text-left text-sm font-medium hover:underline disabled:no-underline"
-										disabled={!selectedFile || isOpeningFileInEditor}
+										disabled={!focusedFile || isOpeningFileInEditor}
 										onClick={() => void handleOpenSelectedFile()}
-										title={selectedFile?.path ?? "Diff"}
+										title={focusedFile?.path ?? "Diff"}
 									>
-										{selectedFile?.path ?? "Diff"}
+										{focusedFile?.path ?? "Diff"}
 									</button>
+									{selectedPaths.size > 1 ? (
+										<span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+											+{selectedPaths.size - 1}
+										</span>
+									) : null}
 								</div>
-								{selectedFile?.previousPath ? (
+								{focusedFile?.previousPath ? (
 									<div className="truncate text-xs text-muted-foreground">
-										renamed from {selectedFile.previousPath}
+										renamed from {focusedFile.previousPath}
 									</div>
 								) : null}
 							</div>
-							{selectedFile ? (
+							{selectedFiles.length > 0 ? (
 								<div className="flex items-center gap-2">
 									<Button
 										type="button"
 										size="sm"
 										variant="destructive"
 										disabled={activeFileAction !== null}
-										onClick={() => void handleDiscardFile(selectedFile)}
+										onClick={() =>
+											void (selectedFiles.length > 1
+												? handleBulkDiscard()
+												: focusedFile && handleDiscardFile(focusedFile))
+										}
 									>
 										<Trash2 data-icon="inline-start" />
-										{activeFileAction?.path === selectedFile.path &&
-										activeFileAction.kind === "discard"
+										{activeFileAction?.kind === "discard"
 											? "Discarding…"
-											: pendingDiscardPath === selectedFile.path
+											: pendingDiscardPath !== null
 												? "Confirm discard"
-												: "Discard"}
+												: selectedFiles.length > 1
+													? `Discard (${selectedFiles.length})`
+													: "Discard"}
 									</Button>
 									<Button
 										type="button"
 										size="sm"
 										variant="outline"
 										disabled={activeFileAction !== null}
-										onClick={() => void handleStageFile(selectedFile)}
+										onClick={() =>
+											void (selectedFiles.length > 1
+												? handleBulkStage()
+												: focusedFile && handleStageFile(focusedFile))
+										}
 									>
-										{getStageActionKind(selectedFile) === "unstage" ? (
-											<X data-icon="inline-start" />
-										) : (
-											<Check data-icon="inline-start" />
-										)}
-										{activeFileAction?.path === selectedFile.path &&
-										activeFileAction.kind === "stage"
+										<Check data-icon="inline-start" />
+										{activeFileAction?.kind === "stage" ||
+										activeFileAction?.kind === "unstage"
 											? "Staging…"
-											: activeFileAction?.path === selectedFile.path &&
-													activeFileAction.kind === "unstage"
-												? "Unstaging…"
-												: getStageActionKind(selectedFile) === "unstage"
+											: selectedFiles.length > 1
+												? `Stage (${selectedFiles.length})`
+												: focusedFile &&
+													  getStageActionKind(focusedFile) === "unstage"
 													? "Unstage"
 													: "Stage"}
 									</Button>
@@ -1108,8 +1211,8 @@ export default function BranchPage() {
 							<div className="flex min-h-0 flex-1 items-center justify-center p-8 text-center text-sm text-destructive">
 								{error}
 							</div>
-						) : selectedFile ? (
-							<DiffViewer diff={selectedFile.diff} />
+						) : focusedFile ? (
+							<DiffViewer diff={focusedFile.diff} />
 						) : (
 							<div className="flex min-h-0 flex-1 items-center justify-center p-8 text-sm text-muted-foreground">
 								No uncommitted files.
