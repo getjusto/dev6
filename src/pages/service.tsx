@@ -1,14 +1,13 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom'
-import { ChevronDown, ChevronUp, Loader2, Play, Square } from 'lucide-react'
+import { ChevronDown, ChevronUp, Loader2, Play, RotateCcw, Square } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { useServicesStatus } from '@/hooks/use-services-status'
 import { ansiToSegments } from '@/lib/ansi'
 import { getStableServiceStatus } from '@/lib/services'
 import { SERVICE_TOGGLE_LOADING_MS, type ServiceToggleAction } from '@/lib/service-toggle'
-
-const SERVICE_STATUS_REFRESH_MS = 5000
 
 type LogLineRender = {
   element: React.JSX.Element
@@ -146,6 +145,7 @@ function renderLogLine(
 
 export default function ServicePage() {
   const { serviceName: encodedServiceName } = useParams()
+  const { services } = useServicesStatus()
   let serviceName: string | null = null
 
   if (encodedServiceName) {
@@ -155,7 +155,6 @@ export default function ServicePage() {
       serviceName = encodedServiceName
     }
   }
-  const [service, setService] = useState<Dev5ServiceStatus | null>(null)
   const [logs, setLogs] = useState('')
   const [query, setQuery] = useState('')
   const [activeMatchIndex, setActiveMatchIndex] = useState(0)
@@ -167,7 +166,6 @@ export default function ServicePage() {
   const [now, setNow] = useState(() => Date.now())
   const [error, setError] = useState<string | null>(null)
   const isRefreshingLogsRef = useRef(false)
-  const isRefreshingStatusRef = useRef(false)
   const isMountedRef = useRef(true)
   const refreshVersionRef = useRef(0)
   const logViewportRef = useRef<HTMLDivElement | null>(null)
@@ -196,27 +194,6 @@ export default function ServicePage() {
     const nextIsAtBottom = distanceFromBottom <= 24
     shouldFollowRef.current = nextIsAtBottom
     setIsAtBottom(nextIsAtBottom)
-  }
-
-  async function refreshServiceStatus(currentServiceName: string, refreshVersion: number) {
-    if (!currentServiceName || isRefreshingStatusRef.current) return
-
-    isRefreshingStatusRef.current = true
-
-    try {
-      const nextServices = await window.desktop.getServicesStatus()
-      if (refreshVersion !== refreshVersionRef.current) {
-        return
-      }
-
-      const nextService =
-        nextServices.find((entry) => entry.service_name === currentServiceName) ?? null
-      setService(nextService)
-    } catch {
-      // Keep the last known status if the background refresh fails.
-    } finally {
-      isRefreshingStatusRef.current = false
-    }
   }
 
   async function refreshLogs(showLoading: boolean) {
@@ -263,7 +240,6 @@ export default function ServicePage() {
   useEffect(() => {
     refreshVersionRef.current += 1
     isRefreshingLogsRef.current = false
-    isRefreshingStatusRef.current = false
     shouldFollowRef.current = true
     shouldScrollToBottomOnLoadRef.current = true
     setIsAtBottom(true)
@@ -272,29 +248,22 @@ export default function ServicePage() {
     setPendingToggleAction(null)
     setPendingToggleUntil(null)
     setError(null)
-    setService(null)
     setLogs('')
-    void refreshServiceStatus(serviceName ?? '', refreshVersionRef.current)
     void refreshLogs(true)
 
     const logsIntervalId = window.setInterval(() => {
       void refreshLogs(false)
     }, 1000)
 
-    const statusIntervalId = window.setInterval(() => {
-      if (!serviceName) {
-        return
-      }
-
-      void refreshServiceStatus(serviceName, refreshVersionRef.current)
-    }, SERVICE_STATUS_REFRESH_MS)
-
     return () => {
       window.clearInterval(logsIntervalId)
-      window.clearInterval(statusIntervalId)
     }
   }, [serviceName])
 
+  const service = useMemo(
+    () => services.find((entry) => entry.service_name === serviceName) ?? null,
+    [serviceName, services],
+  )
   const stableServiceStatus = service ? getStableServiceStatus(service) : null
   const isPendingToggle =
     pendingToggleAction !== null && pendingToggleUntil !== null && pendingToggleUntil > now
@@ -355,23 +324,24 @@ export default function ServicePage() {
     activeNode?.scrollIntoView({ block: 'center' })
   }, [activeMatchIndex, normalizedQuery])
 
-  async function handleToggle() {
-    if (!serviceName || !service || isToggling || isPendingToggle) return
+  async function handleServiceAction(action: ServiceToggleAction) {
+    if (!serviceName || isToggling || isPendingToggle) return
 
-    const nextAction: ServiceToggleAction = stableServiceStatus === 'on' ? 'stop' : 'start'
     const refreshVersion = refreshVersionRef.current
     let toggleError: unknown = null
 
     setError(null)
     setIsToggling(true)
-    setPendingToggleAction(nextAction)
+    setPendingToggleAction(action)
     setPendingToggleUntil(Date.now() + SERVICE_TOGGLE_LOADING_MS)
 
     try {
-      if (stableServiceStatus === 'on') {
+      if (action === 'start') {
+        await window.desktop.startService(serviceName)
+      } else if (action === 'stop') {
         await window.desktop.stopService(serviceName)
       } else {
-        await window.desktop.startService(serviceName)
+        await window.desktop.restartService(serviceName)
       }
     } catch (error) {
       toggleError = error
@@ -379,7 +349,6 @@ export default function ServicePage() {
       if (isMountedRef.current && refreshVersion === refreshVersionRef.current) {
         setIsToggling(false)
         await refreshLogs(false)
-        await refreshServiceStatus(serviceName, refreshVersion)
 
         if (isMountedRef.current && refreshVersion === refreshVersionRef.current && toggleError) {
           setError(
@@ -388,6 +357,46 @@ export default function ServicePage() {
         }
       }
     }
+  }
+
+  function renderServiceActionButton(action: ServiceToggleAction) {
+    const isPendingAction = isPendingToggle && pendingToggleAction === action
+
+    const actionConfig = {
+      start: {
+        label: 'Start',
+        icon: <Play data-icon="inline-start" />,
+        variant: 'outline' as const,
+      },
+      stop: {
+        label: 'Stop',
+        icon: <Square data-icon="inline-start" />,
+        variant: 'destructive' as const,
+      },
+      restart: {
+        label: 'Restart',
+        icon: <RotateCcw data-icon="inline-start" />,
+        variant: 'outline' as const,
+      },
+    }[action]
+
+    return (
+      <Button
+        key={action}
+        variant={actionConfig.variant}
+        size="sm"
+        className="w-24"
+        onClick={() => void handleServiceAction(action)}
+        disabled={!serviceName || isToggling || isPendingToggle}
+      >
+        {isPendingAction ? (
+          <Loader2 data-icon="inline-start" className="animate-spin" />
+        ) : (
+          actionConfig.icon
+        )}
+        {actionConfig.label}
+      </Button>
+    )
   }
 
   function handleNextMatch() {
@@ -411,28 +420,10 @@ export default function ServicePage() {
                 {serviceName ?? ''}
               </h1>
             </div>
-            <div className="shrink-0 flex items-center gap-2">
-              <Button
-                variant={stableServiceStatus === 'on' ? 'destructive' : 'outline'}
-                size="sm"
-                onClick={() => void handleToggle()}
-                disabled={!service || isToggling || isPendingToggle}
-              >
-                {isPendingToggle ? (
-                  <Loader2 className="animate-spin" />
-                ) : stableServiceStatus === 'on' ? (
-                  <Square />
-                ) : (
-                  <Play />
-                )}
-                {isPendingToggle
-                  ? pendingToggleAction === 'stop'
-                    ? 'Stopping…'
-                    : 'Starting…'
-                  : stableServiceStatus === 'on'
-                    ? 'Stop'
-                    : 'Start'}
-              </Button>
+            <div className="flex shrink-0 items-center gap-2">
+              {(['start', 'stop', 'restart'] as const).map((action) =>
+                renderServiceActionButton(action),
+              )}
             </div>
           </div>
           <div className="mt-3">

@@ -20,6 +20,19 @@ type TerminalSessionSummaryPayload = {
   signal: number | null
 }
 
+type Dev5ServiceStatusPayload = {
+  dir_name: string
+  service_name: string
+  port: number | null
+  desired_state?: 'on' | 'off' | null
+  status: 'on' | 'off' | 'error' | 'loadingOn' | 'loadingOff'
+  managed: boolean
+  pid: number | null
+  port_open: boolean
+  http_status_code: number | null
+  http_error: string | null
+}
+
 contextBridge.exposeInMainWorld('desktop', {
   getAppInfo: () => ipcRenderer.invoke('app:get-info'),
   getUpdateStatus: () => ipcRenderer.invoke('updates:get-status'),
@@ -47,8 +60,20 @@ contextBridge.exposeInMainWorld('desktop', {
     )
   },
   getServicesStatus: () => ipcRenderer.invoke('dev5:status'),
+  onServicesStatusChanged: (callback: (services: Dev5ServiceStatusPayload[]) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, services: Dev5ServiceStatusPayload[]) => {
+      callback(services)
+    }
+
+    ipcRenderer.on('dev5:status-changed', listener)
+
+    return () => {
+      ipcRenderer.removeListener('dev5:status-changed', listener)
+    }
+  },
   startService: (serviceName: string) => ipcRenderer.invoke('dev5:start-service', serviceName),
   stopService: (serviceName: string) => ipcRenderer.invoke('dev5:stop-service', serviceName),
+  restartService: (serviceName: string) => ipcRenderer.invoke('dev5:restart-service', serviceName),
   stopAllServices: () => ipcRenderer.invoke('dev5:stop-all'),
   getServiceLogs: (serviceName: string, lineCount?: number) =>
     ipcRenderer.invoke('dev5:logs', serviceName, lineCount),

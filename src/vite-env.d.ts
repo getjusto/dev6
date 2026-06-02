@@ -56,6 +56,7 @@ declare global {
 		dir_name: string;
 		service_name: string;
 		port: number | null;
+		desired_state?: "on" | "off" | null;
 		status: "on" | "off" | "error" | "loadingOn" | "loadingOff";
 		managed: boolean;
 		pid: number | null;
@@ -127,8 +128,10 @@ declare global {
 		getSettings: () => Promise<AppSettings>;
 		setSettings: (patch: Partial<AppSettings>) => Promise<void>;
 		getServicesStatus: () => Promise<Dev5ServiceStatus[]>;
+		onServicesStatusChanged: (callback: (services: Dev5ServiceStatus[]) => void) => () => void;
 		startService: (serviceName: string) => Promise<unknown>;
 		stopService: (serviceName: string) => Promise<unknown>;
+		restartService: (serviceName: string) => Promise<unknown>;
 		stopAllServices: () => Promise<unknown>;
 		getServiceLogs: (
 			serviceName: string,

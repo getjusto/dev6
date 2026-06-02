@@ -104,6 +104,8 @@ const terminalSessions = new Map<string, TerminalSessionRecord>()
 const terminalAppIconCache = new Map<TerminalSessionAppKind, string | null>()
 let terminalLabelCounter = 0
 let terminalCwdInterval: NodeJS.Timeout | null = null
+let servicesStatusCachePath: string | null = null
+let servicesStatusDaemonPromise: Promise<void> | null = null
 let gitFetchPromise: Promise<void> | null = null
 let servicesRepoQueue: Promise<void> = Promise.resolve()
 let lastGitFetchAttemptAt = 0
@@ -155,6 +157,11 @@ function readSettings(): Record<string, unknown> {
 function writeSettings(patch: Record<string, unknown>) {
   const current = readSettings()
   fs.writeFileSync(settingsPath, JSON.stringify({ ...current, ...patch }, null, 2))
+}
+
+function hasServicesPathConfigured() {
+  const settings = readSettings()
+  return typeof settings.servicesPath === 'string' && settings.servicesPath.length > 0
 }
 
 function getServicesPath(): string {
@@ -313,6 +320,23 @@ async function getCommandEnv(): Promise<NodeJS.ProcessEnv> {
   }
 
   return commandEnvPromise
+}
+
+async function execDev5InServices(
+  args: string[],
+  options?: { maxBuffer?: number },
+): Promise<string> {
+  const servicesPath = getServicesPath()
+  const env = await getCommandEnv()
+  const dev5Path = path.join(servicesPath, 'dev5')
+  const { stdout } = await execFileAsync(dev5Path, args, {
+    cwd: servicesPath,
+    encoding: 'utf-8',
+    env,
+    maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024,
+  })
+
+  return stdout
 }
 
 async function openServicesInEditor(editor: keyof typeof EDITOR_APP_NAMES) {
@@ -881,16 +905,91 @@ function resizeTerminalSession(sessionId: string, cols: number, rows: number) {
 
 async function callDev5(...args: string[]): Promise<unknown> {
   return enqueueServicesRepoCommand(async () => {
-    const servicesPath = getServicesPath()
-    const env = await getCommandEnv()
-    const { stdout } = await execFileAsync('yarn', ['--silent', 'dev5', ...args, '--json'], {
-      cwd: servicesPath,
-      encoding: 'utf-8',
-      env,
-      maxBuffer: 10 * 1024 * 1024,
-    })
+    const stdout = await execDev5InServices([...args, '--json'])
     return JSON.parse(stdout)
   })
+}
+
+function sendServicesStatusChanged(status: unknown[]) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send('dev5:status-changed', status)
+  }
+}
+
+async function ensureServicesStatusDaemon() {
+  if (!hasServicesPathConfigured()) {
+    return
+  }
+
+  if (servicesStatusDaemonPromise) {
+    await servicesStatusDaemonPromise
+    return
+  }
+
+  servicesStatusDaemonPromise = (async () => {
+    await callDev5('status-daemon', 'start')
+    watchServicesStatusCache()
+    await emitServicesStatusSnapshot()
+  })()
+
+  try {
+    await servicesStatusDaemonPromise
+  } finally {
+    servicesStatusDaemonPromise = null
+  }
+}
+
+function watchServicesStatusCache() {
+  const cachePath = path.join(getServicesPath(), '.local', 'dev5-status-cache.json')
+  if (servicesStatusCachePath === cachePath) {
+    return
+  }
+
+  if (servicesStatusCachePath) {
+    fs.unwatchFile(servicesStatusCachePath)
+  }
+
+  servicesStatusCachePath = cachePath
+  fs.watchFile(cachePath, { interval: 1000 }, (current, previous) => {
+    if (current.mtimeMs === previous.mtimeMs && current.size === previous.size) {
+      return
+    }
+
+    void emitServicesStatusSnapshot()
+  })
+}
+
+function resetServicesStatusWatch() {
+  if (servicesStatusCachePath) {
+    fs.unwatchFile(servicesStatusCachePath)
+    servicesStatusCachePath = null
+  }
+
+  void ensureServicesStatusDaemon().catch(() => {
+    // The renderer will surface the next explicit status request error.
+  })
+}
+
+async function readServicesStatusSnapshot(): Promise<unknown[]> {
+  const status = await callDev5('status')
+  if (!Array.isArray(status)) {
+    throw new Error('Could not resolve services status.')
+  }
+
+  return status
+}
+
+async function emitServicesStatusSnapshot() {
+  try {
+    sendServicesStatusChanged(await readServicesStatusSnapshot())
+  } catch {
+    // Keep the last renderer state if the daemon cache is temporarily unavailable.
+  }
+}
+
+async function getServicesStatusSnapshot(): Promise<unknown[]> {
+  await ensureServicesStatusDaemon()
+  return readServicesStatusSnapshot()
 }
 
 async function readDev5Logs(serviceName: string, lineCount: number): Promise<string> {
@@ -899,15 +998,8 @@ async function readDev5Logs(serviceName: string, lineCount: number): Promise<str
     return fileLogs
   }
 
-  const servicesPath = getServicesPath()
-  const env = await getCommandEnv()
-  const { stdout } = await enqueueServicesRepoCommand(() =>
-    execFileAsync('yarn', ['--silent', 'dev5', 'logs', serviceName, '-n', String(lineCount)], {
-      cwd: servicesPath,
-      encoding: 'utf-8',
-      env,
-      maxBuffer: 10 * 1024 * 1024,
-    }),
+  const stdout = await enqueueServicesRepoCommand(() =>
+    execDev5InServices(['logs', serviceName, '-n', String(lineCount)]),
   )
 
   return stdout
@@ -1776,6 +1868,9 @@ function setupUpdater() {
 app.whenReady().then(() => {
   createMainWindow()
   setupUpdater()
+  void ensureServicesStatusDaemon().catch(() => {
+    // Settings may not be configured yet on the welcome screen.
+  })
 
   ipcMain.handle('app:get-info', () => ({
     appName: app.getName(),
@@ -1818,10 +1913,13 @@ app.whenReady().then(() => {
   ipcMain.handle('settings:get', () => readSettings())
   ipcMain.handle('settings:set', (_event, patch: Record<string, unknown>) => {
     writeSettings(patch)
+    if ('servicesPath' in patch) {
+      resetServicesStatusWatch()
+    }
   })
 
   ipcMain.handle('dev5:status', async () => {
-    return callDev5('status')
+    return getServicesStatusSnapshot()
   })
 
   ipcMain.handle('dev5:start-service', async (_event, serviceName: string) => {
@@ -1830,6 +1928,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle('dev5:stop-service', async (_event, serviceName: string) => {
     return callDev5('stop', serviceName)
+  })
+
+  ipcMain.handle('dev5:restart-service', async (_event, serviceName: string) => {
+    return callDev5('restart', serviceName)
   })
 
   ipcMain.handle('dev5:stop-all', async () => {

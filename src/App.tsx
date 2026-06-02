@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { AppSidebar } from '@/components/app-sidebar'
 import { GitStatusProvider } from '@/components/git-status-provider'
+import { ServicesStatusProvider } from '@/components/services-status-provider'
 import { TerminalSessionsProvider } from '@/components/terminal-sessions-provider'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { useTerminalSessions } from '@/hooks/use-terminal-sessions'
@@ -79,9 +80,11 @@ function App() {
 
   return (
     <TerminalSessionsProvider>
-      <GitStatusProvider>
-        <AppShell />
-      </GitStatusProvider>
+      <ServicesStatusProvider>
+        <GitStatusProvider>
+          <AppShell />
+        </GitStatusProvider>
+      </ServicesStatusProvider>
     </TerminalSessionsProvider>
   )
 }

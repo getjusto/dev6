@@ -10,6 +10,7 @@ import {
 	SidebarMenuButton,
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
+import { useServicesStatus } from "@/hooks/use-services-status";
 import { SERVICE_TOGGLE_LOADING_MS } from "@/lib/service-toggle";
 import { getStableServiceStatus } from "@/lib/services";
 import { ServiceStatus } from "./service-status";
@@ -62,16 +63,15 @@ function ServiceRow({
 
 export function SidebarServices() {
 	const navigate = useNavigate();
-	const [services, setServices] = useState<Dev5ServiceStatus[]>([]);
-	const [isLoading, setIsLoading] = useState(true);
-	const [error, setError] = useState<string | null>(null);
+	const { services, isLoading, error: statusError } = useServicesStatus();
+	const [actionError, setActionError] = useState<string | null>(null);
 	const [pendingUntilByService, setPendingUntilByService] = useState<
 		Record<string, number>
 	>({});
 	const [busyServices, setBusyServices] = useState<Record<string, boolean>>({});
 	const [now, setNow] = useState(() => Date.now());
-	const isRefreshingRef = useRef(false);
 	const isMountedRef = useRef(true);
+	const error = actionError ?? statusError;
 
 	useEffect(() => {
 		return () => {
@@ -89,50 +89,6 @@ export function SidebarServices() {
 		};
 	}, []);
 
-	async function refreshServices(showLoading: boolean) {
-		if (isRefreshingRef.current) {
-			return;
-		}
-
-		isRefreshingRef.current = true;
-
-		try {
-			if (showLoading) {
-				setIsLoading(true);
-			}
-
-			const nextServices = await window.desktop.getServicesStatus();
-			nextServices.sort((left, right) => left.dir_name.localeCompare(right.dir_name));
-			setError(null);
-			setServices(nextServices);
-		} catch (loadError) {
-			setError(
-				loadError instanceof Error
-					? loadError.message
-					: "Could not load services.",
-			);
-		} finally {
-			isRefreshingRef.current = false;
-			setIsLoading(false);
-		}
-	}
-
-	useEffect(() => {
-		let cancelled = false;
-
-		void refreshServices(true);
-		const intervalId = window.setInterval(() => {
-			if (!cancelled) {
-				void refreshServices(false);
-			}
-		}, 5000);
-
-		return () => {
-			cancelled = true;
-			window.clearInterval(intervalId);
-		};
-	}, []);
-
 	async function handleToggle(service: Dev5ServiceStatus) {
 		const serviceName = service.service_name;
 		const isPending = (pendingUntilByService[serviceName] ?? 0) > now;
@@ -141,7 +97,7 @@ export function SidebarServices() {
 			return;
 		}
 
-		setError(null);
+		setActionError(null);
 		const stableStatus = getStableServiceStatus(service);
 
 		setBusyServices((current) => ({
@@ -157,9 +113,7 @@ export function SidebarServices() {
 
 		try {
 			if (service.status === "error") {
-				await window.desktop.stopService(serviceName);
-				await new Promise((resolve) => setTimeout(resolve, 1000));
-				await window.desktop.startService(serviceName);
+				await window.desktop.restartService(serviceName);
 			} else if (stableStatus === "on") {
 				await window.desktop.stopService(serviceName);
 			} else {
@@ -175,10 +129,8 @@ export function SidebarServices() {
 					return next;
 				});
 
-				void refreshServices(false);
-
 				if (toggleError) {
-					setError(
+					setActionError(
 						toggleError instanceof Error
 							? toggleError.message
 							: "Could not change service state.",
