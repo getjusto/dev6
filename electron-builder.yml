@@ -5,6 +5,9 @@ directories:
 files:
   - dist/**
   - dist-electron/**
+extraResources:
+  - from: scripts/dev6-command-helper.mjs
+    to: dev6-command-helper.mjs
 asar: true
 icon: build/icon.icns
 mac:

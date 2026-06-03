@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { autoUpdater } from 'electron-updater'
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -12,6 +13,9 @@ const execFileAsync = promisify(execFile)
 let commandEnvPromise: Promise<NodeJS.ProcessEnv> | null = null
 let mainWindow: BrowserWindow | null = null
 const LOG_TAIL_CHUNK_BYTES = 64 * 1024
+const COMMAND_HELPER_POLL_MS = 100
+const COMMAND_HELPER_HEARTBEAT_MAX_AGE_MS = 5000
+const COMMAND_HELPER_START_TIMEOUT_MS = 5000
 const EDITOR_APP_NAMES = {
   zed: 'Zed',
   vscode: 'Visual Studio Code',
@@ -20,6 +24,7 @@ const EDITOR_APP_NAMES = {
 
 let servicesStatusCachePath: string | null = null
 let servicesStatusDaemonPromise: Promise<void> | null = null
+let commandHelperStartPromise: Promise<void> | null = null
 let servicesRepoQueue: Promise<void> = Promise.resolve()
 const EDITOR_APP_BUNDLES = {
   zed: 'Zed.app',
@@ -222,21 +227,287 @@ async function getCommandEnv(): Promise<NodeJS.ProcessEnv> {
   return commandEnvPromise
 }
 
+function shellQuote(value: string) {
+  return `'${value.replace(/'/g, `'\\''`)}'`
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function createCommandError(command: string, exitCode: number, stdout: string, stderr: string) {
+  const detail = stderr.trim() || stdout.trim() || `Command exited with status ${exitCode}.`
+  const error = new Error(detail) as Error & {
+    code: number
+    stdout: string
+    stderr: string
+  }
+
+  error.name = 'CommandExecutionError'
+  error.code = exitCode
+  error.stdout = stdout
+  error.stderr = stderr
+  error.message = `${detail}\n\nCommand: ${command}`
+
+  return error
+}
+
+function isCurrentProcessRestricted() {
+  try {
+    os.uptime()
+    return false
+  } catch {
+    return true
+  }
+}
+
+function getCommandHelperDirectoryPath() {
+  return path.join(app.getPath('userData'), 'command-helper')
+}
+
+function getCommandHelperTokenPath() {
+  return path.join(app.getPath('userData'), 'command-helper-token')
+}
+
+function getCommandHelperToken() {
+  const tokenPath = getCommandHelperTokenPath()
+
+  try {
+    const token = fs.readFileSync(tokenPath, 'utf-8').trim()
+    if (token) {
+      return token
+    }
+  } catch {
+    // Created below.
+  }
+
+  const token = randomUUID()
+  fs.mkdirSync(path.dirname(tokenPath), { recursive: true })
+  fs.writeFileSync(tokenPath, token, { encoding: 'utf-8', mode: 0o600 })
+  return token
+}
+
+function getCommandHelperScriptPath() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'dev6-command-helper.mjs')
+  }
+
+  return path.join(app.getAppPath(), 'scripts', 'dev6-command-helper.mjs')
+}
+
+function getCommandHelperStartCommand() {
+  return [
+    'node',
+    shellQuote(getCommandHelperScriptPath()),
+    '--dir',
+    shellQuote(getCommandHelperDirectoryPath()),
+    '--token',
+    shellQuote(getCommandHelperToken()),
+  ].join(' ')
+}
+
+function createCommandHelperUnavailableError(detail?: string) {
+  const error = new Error(
+    [
+      detail ?? 'The dev6 command helper is not running.',
+      'dev6 is running in a restricted macOS context, so child processes would inherit that restriction.',
+      'Start the helper from a normal Terminal session and retry:',
+      '',
+      getCommandHelperStartCommand(),
+    ].join('\n'),
+  )
+  error.name = 'CommandHelperUnavailableError'
+  return error
+}
+
+type CommandHelperResponse = {
+  id: string
+  stdout?: string
+  stderr?: string
+  exitCode?: number
+  error?: string
+}
+
+function getCommandHelperHeartbeatPath() {
+  return path.join(getCommandHelperDirectoryPath(), 'heartbeat.json')
+}
+
+function isCommandHelperHeartbeatFresh() {
+  try {
+    const heartbeat = JSON.parse(fs.readFileSync(getCommandHelperHeartbeatPath(), 'utf-8')) as {
+      updatedAt?: number
+    }
+
+    return (
+      typeof heartbeat.updatedAt === 'number' &&
+      Date.now() - heartbeat.updatedAt < COMMAND_HELPER_HEARTBEAT_MAX_AGE_MS
+    )
+  } catch {
+    return false
+  }
+}
+
+async function waitForCommandHelperHeartbeat(timeoutMs: number) {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    if (isCommandHelperHeartbeatFresh()) {
+      return
+    }
+
+    await sleep(COMMAND_HELPER_POLL_MS)
+  }
+
+  throw createCommandHelperUnavailableError('The dev6 command helper did not start in time.')
+}
+
+async function startCommandHelper() {
+  const env = await getCommandEnv()
+  const shellPath = env.SHELL || '/bin/zsh'
+  const helperDir = getCommandHelperDirectoryPath()
+
+  await fs.promises.mkdir(helperDir, { recursive: true, mode: 0o700 })
+  await fs.promises.chmod(helperDir, 0o700).catch(() => {
+    // Best effort; the token still protects command execution.
+  })
+
+  const child = spawn(shellPath, ['-lc', `exec ${getCommandHelperStartCommand()}`], {
+    cwd: app.getPath('home'),
+    detached: true,
+    env,
+    stdio: 'ignore',
+  })
+
+  child.unref()
+  await waitForCommandHelperHeartbeat(COMMAND_HELPER_START_TIMEOUT_MS)
+}
+
+async function ensureCommandHelperRunning() {
+  if (isCommandHelperHeartbeatFresh()) {
+    return
+  }
+
+  if (isCurrentProcessRestricted()) {
+    throw createCommandHelperUnavailableError()
+  }
+
+  if (!commandHelperStartPromise) {
+    commandHelperStartPromise = startCommandHelper().finally(() => {
+      commandHelperStartPromise = null
+    })
+  }
+
+  await commandHelperStartPromise
+}
+
+async function execCommandViaHelper(
+  command: string,
+  options: { cwd: string; maxBuffer?: number },
+): Promise<string> {
+  const id = randomUUID()
+  const token = getCommandHelperToken()
+  const helperDir = getCommandHelperDirectoryPath()
+  const requestPath = path.join(helperDir, `request-${id}.json`)
+  const requestTempPath = path.join(helperDir, `request-${id}.tmp`)
+  const responsePath = path.join(helperDir, `response-${id}.json`)
+
+  await ensureCommandHelperRunning()
+
+  await fs.promises.mkdir(helperDir, { recursive: true, mode: 0o700 })
+  await fs.promises.chmod(helperDir, 0o700).catch(() => {
+    // Best effort; the token still protects command execution.
+  })
+  await fs.promises.writeFile(
+    requestTempPath,
+    JSON.stringify({
+      id,
+      token,
+      command,
+      cwd: options.cwd,
+      maxBuffer: options.maxBuffer ?? 10 * 1024 * 1024,
+    }),
+    { encoding: 'utf-8', mode: 0o600 },
+  )
+  await fs.promises.rename(requestTempPath, requestPath)
+
+  try {
+    while (true) {
+      try {
+        const response = JSON.parse(
+          await fs.promises.readFile(responsePath, 'utf-8'),
+        ) as CommandHelperResponse
+        const stdout = response.stdout ?? ''
+        const stderr = response.stderr ?? ''
+        const exitCode = response.exitCode ?? (response.error ? 1 : 0)
+
+        if (response.id !== id) {
+          throw createCommandHelperUnavailableError('The dev6 command helper returned an invalid response.')
+        }
+
+        if (exitCode !== 0 || response.error) {
+          throw createCommandError(command, exitCode, stdout, stderr || response.error || '')
+        }
+
+        return stdout
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error
+        }
+      }
+
+      if (!isCommandHelperHeartbeatFresh()) {
+        throw createCommandHelperUnavailableError('The dev6 command helper stopped before returning a response.')
+      }
+
+      await sleep(COMMAND_HELPER_POLL_MS)
+    }
+  } finally {
+    await Promise.all([
+      fs.promises.rm(requestPath, { force: true }),
+      fs.promises.rm(requestTempPath, { force: true }),
+      fs.promises.rm(responsePath, { force: true }),
+    ])
+  }
+}
+
+async function execCommandWithInheritedProcess(
+  command: string,
+  options: { cwd: string; maxBuffer?: number },
+): Promise<string> {
+  const env = await getCommandEnv()
+  const shellPath = env.SHELL || '/bin/zsh'
+  const { stdout } = await execFileAsync(shellPath, ['-lc', command], {
+    cwd: options.cwd,
+    encoding: 'utf-8',
+    env,
+    maxBuffer: options.maxBuffer ?? 10 * 1024 * 1024,
+  })
+
+  return stdout
+}
+
+async function execLocalCommand(
+  command: string,
+  options: { cwd: string; maxBuffer?: number },
+): Promise<string> {
+  if (process.platform === 'darwin') {
+    return execCommandViaHelper(command, options)
+  }
+
+  return execCommandWithInheritedProcess(command, options)
+}
+
 async function execDev5InServices(
   args: string[],
   options?: { maxBuffer?: number },
 ): Promise<string> {
   const servicesPath = getServicesPath()
-  const env = await getCommandEnv()
-  const dev5Path = path.join(servicesPath, 'dev5')
-  const { stdout } = await execFileAsync(dev5Path, args, {
+  const command = ['./dev5', ...args].map(shellQuote).join(' ')
+
+  return execLocalCommand(command, {
     cwd: servicesPath,
-    encoding: 'utf-8',
-    env,
     maxBuffer: options?.maxBuffer ?? 10 * 1024 * 1024,
   })
-
-  return stdout
 }
 
 async function openServicesInEditor(editor: keyof typeof EDITOR_APP_NAMES) {
