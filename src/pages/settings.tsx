@@ -176,7 +176,7 @@ export default function SettingsPage() {
             <div>
               <h3 className="text-sm font-medium">Services Folder</h3>
               <p className="text-sm text-muted-foreground">
-                Path to the justo-services repository.
+                Path to the justo-services folder.
               </p>
             </div>
             <div className="flex items-center gap-2">

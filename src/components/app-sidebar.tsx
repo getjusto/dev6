@@ -1,9 +1,8 @@
 import * as React from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { Loader2, Settings, Square } from 'lucide-react'
 
 import { SidebarServices } from '@/components/sidebar-services'
-import { SidebarTerminals } from '@/components/sidebar-terminals'
 import isoDarkUrl from '@/assets/iso-dark.svg'
 import isoWhiteUrl from '@/assets/iso-white.svg'
 import cursorIconUrl from '@/assets/editor-icons/cursor.png'
@@ -18,7 +17,6 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from '@/components/ui/sidebar'
-import { useGitStatus } from '@/hooks/use-git-status'
 
 function editorLabel(editor: 'zed' | 'vscode' | 'cursor') {
   switch (editor) {
@@ -44,10 +42,6 @@ function editorIconPath(editor: 'zed' | 'vscode' | 'cursor') {
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const location = useLocation()
-  const navigate = useNavigate()
-  const { snapshot } = useGitStatus()
-  const [branchName, setBranchName] = React.useState('Dev6')
-  const [gitSummary, setGitSummary] = React.useState({ additions: 0, deletions: 0 })
   const [isOpeningEditor, setIsOpeningEditor] = React.useState(false)
   const [isStoppingAll, setIsStoppingAll] = React.useState(false)
   const [preferredEditor, setPreferredEditor] = React.useState<'zed' | 'vscode' | 'cursor'>('zed')
@@ -95,21 +89,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }, [])
 
-  React.useEffect(() => {
-    if (!snapshot) {
-      return
-    }
-
-    if (snapshot.branch) {
-      setBranchName(snapshot.branch)
-    }
-
-    setGitSummary({
-      additions: snapshot.additions,
-      deletions: snapshot.deletions,
-    })
-  }, [snapshot])
-
   async function handleOpenEditor() {
     try {
       setIsOpeningEditor(true)
@@ -128,13 +107,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }
 
-  async function handleCreateTerminal() {
-    const session = await window.desktop.createTerminalSession({
-      backgroundAppearance: document.documentElement.classList.contains('dark') ? 'dark' : 'light',
-    })
-    navigate(`/terminals/${session.id}`)
-  }
-
   return (
     <Sidebar
       variant="inset"
@@ -149,9 +121,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuButton
               size="lg"
               asChild
-              data-active={location.pathname === '/' || location.pathname === '/branch'}
+              data-active={location.pathname === '/' || location.pathname.startsWith('/services')}
             >
-              <Link to="/branch">
+              <Link to="/services">
                 <img
                   src={isoDarkUrl}
                   alt="Justo"
@@ -164,29 +136,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">Justo</span>
-                  <span className="truncate text-xs">{branchName}</span>
+                  <span className="truncate text-xs">Services</span>
                 </div>
-                {gitSummary.additions > 0 || gitSummary.deletions > 0 ? (
-                  <div className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[11px]">
-                    {gitSummary.additions > 0 ? (
-                      <span className="text-emerald-600 dark:text-emerald-400">
-                        +{gitSummary.additions}
-                      </span>
-                    ) : null}
-                    {gitSummary.deletions > 0 ? (
-                      <span className="text-rose-600 dark:text-rose-400">
-                        -{gitSummary.deletions}
-                      </span>
-                    ) : null}
-                  </div>
-                ) : null}
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent className="min-h-0 overflow-auto">
-        <SidebarTerminals onCreateTerminal={handleCreateTerminal} />
         <SidebarServices />
       </SidebarContent>
       <SidebarFooter>

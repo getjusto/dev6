@@ -40,7 +40,7 @@ export default function WelcomePage({ onComplete }: { onComplete: () => void }) 
       <div className="text-center">
         <h1 className="text-2xl font-semibold">Welcome to Dev6</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Select the path to your justo-services repository to get started.
+          Select the path to your justo-services folder to get started.
         </p>
       </div>
 
@@ -63,7 +63,7 @@ export default function WelcomePage({ onComplete }: { onComplete: () => void }) 
               {status === 'valid' && (
                 <>
                   <CheckCircle2 className="size-3.5 text-green-600" />
-                  <span className="text-green-600">Valid justo-services repository</span>
+                  <span className="text-green-600">Valid justo-services folder</span>
                 </>
               )}
               {status === 'invalid' && (
