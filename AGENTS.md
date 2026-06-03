@@ -18,7 +18,11 @@ This is an electron app made for Engineer in Justo company to help them develop 
 - Lint: `pnpm lint`
 - Build: `pnpm build`
 - Package mac app: `pnpm dist:mac`
-- Test the Electron app using the `peekaboo see --app "Electron" --window-title "app"` CLI
+- `pnpm dev` starts the Vite dev server on `http://localhost:4932/` and launches the Electron app that loads that server. Keep this command running while testing.
+- Test the actual Electron window, not just the Vite URL in a browser. The renderer depends on the Electron preload API (`window.desktop`), so opening `http://localhost:4932/` alone can show a blank or incomplete app.
+- Test the Electron app with Computer use / Peekaboo, for example `peekaboo see --app "Electron" --window-title "app"`. If multiple Electron apps are running, identify the right PID with `pgrep -fl "Electron.app/Contents/MacOS/Electron|vite"` or `peekaboo list apps --json`, then use `peekaboo see --pid <pid>`.
+- For interactions, use Peekaboo commands against the Electron window, such as `peekaboo click --pid <pid> --coords "x,y"`, then capture again with `peekaboo see`.
+- Do not use `agent-browser`, Playwright CLI, or a plain browser-only test for this app unless the user explicitly changes this instruction.
 
 ## callDev5
 

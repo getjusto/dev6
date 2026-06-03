@@ -1,4 +1,4 @@
-import { Loader2, Power, PowerOff, RotateCcw } from "lucide-react";
+import { CircleAlert, Loader2, Power, PowerOff, RotateCcw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
@@ -11,9 +11,38 @@ import {
 	SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useServicesStatus } from "@/hooks/use-services-status";
-import { SERVICE_TOGGLE_LOADING_MS } from "@/lib/service-toggle";
+import {
+	SERVICE_TOGGLE_LOADING_MS,
+	type ServiceToggleAction,
+} from "@/lib/service-toggle";
 import { getStableServiceStatus } from "@/lib/services";
 import { ServiceStatus } from "./service-status";
+
+type ServiceActionError = {
+	message: string;
+};
+
+function getServiceToggleAction(
+	service: Dev5ServiceStatus,
+	stableStatus: ReturnType<typeof getStableServiceStatus>,
+): ServiceToggleAction {
+	if (service.status === "error") {
+		return "restart";
+	}
+
+	if (stableStatus === "on") {
+		return "stop";
+	}
+
+	return "start";
+}
+
+function getActionErrorMessage(
+	action: ServiceToggleAction,
+	service: Dev5ServiceStatus,
+) {
+	return `Could not ${action} ${service.dir_name}. Check logs.`;
+}
 
 function ServiceRow({
 	service,
@@ -64,14 +93,15 @@ function ServiceRow({
 export function SidebarServices() {
 	const navigate = useNavigate();
 	const { services, isLoading, error: statusError } = useServicesStatus();
-	const [actionError, setActionError] = useState<string | null>(null);
+	const [actionError, setActionError] = useState<ServiceActionError | null>(
+		null,
+	);
 	const [pendingUntilByService, setPendingUntilByService] = useState<
 		Record<string, number>
 	>({});
 	const [busyServices, setBusyServices] = useState<Record<string, boolean>>({});
 	const [now, setNow] = useState(() => Date.now());
 	const isMountedRef = useRef(true);
-	const error = actionError ?? statusError;
 
 	useEffect(() => {
 		return () => {
@@ -89,6 +119,20 @@ export function SidebarServices() {
 		};
 	}, []);
 
+	useEffect(() => {
+		if (!actionError) {
+			return;
+		}
+
+		const timeoutId = window.setTimeout(() => {
+			setActionError(null);
+		}, 6000);
+
+		return () => {
+			window.clearTimeout(timeoutId);
+		};
+	}, [actionError]);
+
 	async function handleToggle(service: Dev5ServiceStatus) {
 		const serviceName = service.service_name;
 		const isPending = (pendingUntilByService[serviceName] ?? 0) > now;
@@ -99,6 +143,7 @@ export function SidebarServices() {
 
 		setActionError(null);
 		const stableStatus = getStableServiceStatus(service);
+		const action = getServiceToggleAction(service, stableStatus);
 
 		setBusyServices((current) => ({
 			...current,
@@ -112,9 +157,9 @@ export function SidebarServices() {
 		let toggleError: unknown = null;
 
 		try {
-			if (service.status === "error") {
+			if (action === "restart") {
 				await window.desktop.restartService(serviceName);
-			} else if (stableStatus === "on") {
+			} else if (action === "stop") {
 				await window.desktop.stopService(serviceName);
 			} else {
 				await window.desktop.startService(serviceName);
@@ -130,17 +175,16 @@ export function SidebarServices() {
 				});
 
 				if (toggleError) {
-					setActionError(
-						toggleError instanceof Error
-							? toggleError.message
-							: "Could not change service state.",
-					);
+					setActionError({
+						message: getActionErrorMessage(action, service),
+					});
 				}
 			}
 		}
 	}
 
 	function handleSelect(service: Dev5ServiceStatus) {
+		setActionError(null);
 		navigate(`/services/${encodeURIComponent(service.service_name)}`);
 	}
 
@@ -152,26 +196,44 @@ export function SidebarServices() {
 					<div className="px-2 py-1 text-xs text-muted-foreground">
 						Loading services…
 					</div>
-				) : error ? (
-					<div className="px-2 py-1 text-xs text-destructive">{error}</div>
+				) : statusError ? (
+					<div className="px-2 py-1 text-xs text-destructive">
+						{statusError}
+					</div>
 				) : (
-					<SidebarMenu className="pb-2">
-						{services.map((service) => {
-							const isPending =
-								(pendingUntilByService[service.service_name] ?? 0) > now;
+					<>
+						{actionError ? (
+							<div
+								aria-live="polite"
+								role="status"
+								className="mb-1 flex min-w-0 items-start gap-1.5 rounded-md px-2 py-1 text-destructive text-xs"
+							>
+								<CircleAlert aria-hidden="true" className="mt-0.5 shrink-0" />
+								<span className="min-w-0 truncate" title={actionError.message}>
+									{actionError.message}
+								</span>
+							</div>
+						) : null}
+						<SidebarMenu className="pb-2">
+							{services.map((service) => {
+								const isPending =
+									(pendingUntilByService[service.service_name] ?? 0) > now;
 
-							return (
-								<ServiceRow
-									key={`${service.dir_name}:${service.service_name}`}
-									service={service}
-									isPending={isPending}
-									isBusy={Boolean(busyServices[service.service_name]) || isPending}
-									onToggle={handleToggle}
-									onSelect={handleSelect}
-								/>
-							);
-						})}
-					</SidebarMenu>
+								return (
+									<ServiceRow
+										key={`${service.dir_name}:${service.service_name}`}
+										service={service}
+										isPending={isPending}
+										isBusy={
+											Boolean(busyServices[service.service_name]) || isPending
+										}
+										onToggle={handleToggle}
+										onSelect={handleSelect}
+									/>
+								);
+							})}
+						</SidebarMenu>
+					</>
 				)}
 			</SidebarGroupContent>
 		</SidebarGroup>
